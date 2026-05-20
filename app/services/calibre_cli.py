@@ -136,8 +136,16 @@ def _present_fields_from_opf(opf_xml: str) -> set[str]:
     return present
 
 
-def _fetch_metadata_opf(book_id: int, sources: list[str], opf_hint: str) -> tuple[str | None, str]:
+def _fetch_metadata_opf(
+    book_id: int,
+    sources: list[str],
+    opf_hint: str,
+    *,
+    cover_dest: Path | None = None,
+) -> tuple[str | None, str]:
     args = ["fetch-ebook-metadata", "--opf"]
+    if cover_dest is not None:
+        args.append(f"--cover={cover_dest}")
     for src in sources:
         args.extend(["--allowed-plugin", src])
 
@@ -152,6 +160,15 @@ def _fetch_metadata_opf(book_id: int, sources: list[str], opf_hint: str) -> tupl
     if proc.returncode != 0 or not (proc.stdout or "").strip():
         return None, (proc.stderr or proc.stdout or "no metadata returned").strip()
     return proc.stdout, "fetched"
+
+
+def set_cover(library_path: Path, book_id: int, cover_path: Path) -> bool:
+    proc = _run([
+        "calibredb", "set_cover",
+        "--library-path", str(library_path),
+        str(book_id), str(cover_path),
+    ])
+    return proc.returncode == 0
 
 
 def _title_and_authors_from_opf(opf_xml: str) -> tuple[str | None, list[str]]:
@@ -188,61 +205,87 @@ def refresh_metadata(
     *,
     mode: RefreshMode,
     sources: list[str],
+    fetch_covers: bool = True,
 ) -> RefreshResult:
     existing_opf = show_metadata_opf(library_path, book_id)
-    fetched_opf, fetch_message = _fetch_metadata_opf(book_id, sources, existing_opf)
-    if fetched_opf is None:
-        lower = fetch_message.lower()
-        no_match = "no results" in lower or "no metadata" in lower
-        state = "no_match" if no_match else "error"
-        return RefreshResult(book_id=book_id, state=state, message=fetch_message)
 
-    fetched_title, fetched_authors = _title_and_authors_from_opf(fetched_opf)
-    fetched_fields: dict[str, str] = {}
-    if fetched_title:
-        fetched_fields["title"] = fetched_title
-    if fetched_authors:
-        fetched_fields["authors"] = " & ".join(fetched_authors)
+    with tempfile.TemporaryDirectory() as tmp:
+        cover_dest = Path(tmp) / f"{book_id}-cover.jpg" if fetch_covers else None
+        fetched_opf, fetch_message = _fetch_metadata_opf(
+            book_id, sources, existing_opf, cover_dest=cover_dest,
+        )
+        if fetched_opf is None:
+            lower = fetch_message.lower()
+            no_match = "no results" in lower or "no metadata" in lower
+            state = "no_match" if no_match else "error"
+            return RefreshResult(book_id=book_id, state=state, message=fetch_message)
 
-    try:
-        root = ET.fromstring(fetched_opf)
-        desc = root.find(".//{http://purl.org/dc/elements/1.1/}description")
-        if desc is not None and (desc.text or "").strip():
-            fetched_fields["comments"] = (desc.text or "").strip()
-        publisher = root.find(".//{http://purl.org/dc/elements/1.1/}publisher")
-        if publisher is not None and (publisher.text or "").strip():
-            fetched_fields["publisher"] = (publisher.text or "").strip()
-        series = root.find(".//{http://www.idpf.org/2007/opf}meta[@name='calibre:series']")
-        if series is not None and series.get("content"):
-            fetched_fields["series"] = series.get("content", "")
-        subjects = [
-            (s.text or "").strip()
-            for s in root.findall(".//{http://purl.org/dc/elements/1.1/}subject")
-            if (s.text or "").strip()
-        ]
-        if subjects:
-            fetched_fields["tags"] = ", ".join(subjects)
-    except ET.ParseError:
-        pass
+        fetched_title, fetched_authors = _title_and_authors_from_opf(fetched_opf)
+        fetched_fields: dict[str, str] = {}
+        if fetched_title:
+            fetched_fields["title"] = fetched_title
+        if fetched_authors:
+            fetched_fields["authors"] = " & ".join(fetched_authors)
 
-    if mode == "fill_blanks":
-        present = _present_fields_from_opf(existing_opf)
-        to_apply = {k: v for k, v in fetched_fields.items() if k not in present}
-    else:
-        to_apply = fetched_fields
+        try:
+            root = ET.fromstring(fetched_opf)
+            desc = root.find(".//{http://purl.org/dc/elements/1.1/}description")
+            if desc is not None and (desc.text or "").strip():
+                fetched_fields["comments"] = (desc.text or "").strip()
+            publisher = root.find(".//{http://purl.org/dc/elements/1.1/}publisher")
+            if publisher is not None and (publisher.text or "").strip():
+                fetched_fields["publisher"] = (publisher.text or "").strip()
+            series = root.find(".//{http://www.idpf.org/2007/opf}meta[@name='calibre:series']")
+            if series is not None and series.get("content"):
+                fetched_fields["series"] = series.get("content", "")
+            subjects = [
+                (s.text or "").strip()
+                for s in root.findall(".//{http://purl.org/dc/elements/1.1/}subject")
+                if (s.text or "").strip()
+            ]
+            if subjects:
+                fetched_fields["tags"] = ", ".join(subjects)
+        except ET.ParseError:
+            pass
 
-    if not to_apply:
-        return RefreshResult(book_id=book_id, state="fetched", message="no new fields to apply")
+        if mode == "fill_blanks":
+            present = _present_fields_from_opf(existing_opf)
+            to_apply = {k: v for k, v in fetched_fields.items() if k not in present}
+        else:
+            to_apply = fetched_fields
 
-    argv = _set_metadata_argv(library_path, book_id, to_apply)
-    proc = _run(argv)
-    if proc.returncode != 0:
-        msg = (proc.stderr or proc.stdout).strip()
-        return RefreshResult(book_id=book_id, state="error", message=msg)
+        cover_applied = False
+        if fetch_covers and cover_dest is not None and cover_dest.exists():
+            # In fill_blanks: only set cover if the book has none.
+            # In overwrite: always replace.
+            from app.services import db as _db
+            should_apply = (
+                mode == "overwrite"
+                or _db.get_cover_path(library_path, book_id) is None
+            )
+            if should_apply:
+                cover_applied = set_cover(library_path, book_id, cover_dest)
 
-    return RefreshResult(
-        book_id=book_id, state="fetched", message=f"updated {len(to_apply)} fields",
-    )
+        if not to_apply and not cover_applied:
+            return RefreshResult(
+                book_id=book_id, state="fetched", message="no new fields to apply",
+            )
+
+        if to_apply:
+            argv = _set_metadata_argv(library_path, book_id, to_apply)
+            proc = _run(argv)
+            if proc.returncode != 0:
+                msg = (proc.stderr or proc.stdout).strip()
+                return RefreshResult(book_id=book_id, state="error", message=msg)
+
+        parts = []
+        if to_apply:
+            parts.append(f"updated {len(to_apply)} fields")
+        if cover_applied:
+            parts.append("cover applied")
+        return RefreshResult(
+            book_id=book_id, state="fetched", message="; ".join(parts) or "nothing to do",
+        )
 
 
 def _pick_source_format(formats: list[str], target: ConvertTarget) -> str | None:

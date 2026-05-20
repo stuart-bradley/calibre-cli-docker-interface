@@ -36,6 +36,14 @@ form.search { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; 
 form.search input[type=text], form.search select {
   padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 6px;
   background: var(--bg); color: var(--fg); }
+.search-input-wrap { position: relative; display: inline-block; }
+.suggestions { position: absolute; left: 0; top: 100%; z-index: 10;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  max-height: 18rem; overflow-y: auto; min-width: 20rem; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+.suggestions:empty { display: none; border: none; box-shadow: none; }
+.suggestion-list { list-style: none; padding: 0; margin: 0; }
+.suggestion { padding: 0.4rem 0.8rem; cursor: pointer; }
+.suggestion:hover { background: var(--card); }
 button, .btn {
   padding: 0.4rem 0.8rem; border: 1px solid var(--border); border-radius: 6px;
   background: var(--card); color: var(--fg); cursor: pointer; font-size: 0.9rem; }
@@ -62,6 +70,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .device-status { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; }
 .device-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .device-status.connected .dot { background: var(--good); }
+body:not([data-device-connected]) .cwc-device-only { display: none; }
 .jobs-list table { width: 100%; border-collapse: collapse; }
 .jobs-list th, .jobs-list td { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; }
 .job-row.failed { color: var(--bad); }
@@ -76,3 +85,24 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin-top: 1rem; white-space: pre-wrap; }
 .upload-zone { padding: 2rem; border: 2px dashed var(--border); border-radius: 8px;
   text-align: center; color: var(--muted); }
+.dropzone { border: 2px dashed var(--border); border-radius: 8px;
+  padding: 2rem; text-align: center; color: var(--muted); margin: 0.75rem 0; }
+.dropzone.dragging { border-color: var(--accent); background: var(--card); color: var(--fg); }
+dialog.cwc-modal { max-width: 32rem; padding: 1.25rem; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg); color: var(--fg); }
+dialog.cwc-modal::backdrop { background: rgba(0, 0, 0, 0.4); }
+dialog.cwc-modal h3 { margin: 0 0 1rem; }
+dialog.cwc-modal fieldset { border: 1px solid var(--border); border-radius: 6px;
+  margin: 0 0 0.75rem; padding: 0.5rem 0.75rem; }
+dialog.cwc-modal fieldset legend { padding: 0 0.3rem; color: var(--muted); font-size: 0.85rem; }
+dialog.cwc-modal label { display: block; margin: 0.25rem 0; }
+dialog.cwc-modal label.checkbox-row { display: flex; align-items: center; gap: 0.4rem; margin: 0.5rem 0; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
+dialog.cwc-modal-wide { max-width: 48rem; }
+table.convert-preview { width: 100%; border-collapse: collapse; margin: 0.5rem 0; font-size: 0.9rem; }
+table.convert-preview th, table.convert-preview td { padding: 0.3rem 0.5rem; text-align: left;
+  border-bottom: 1px solid var(--border); }
+table.convert-preview tr.action-already-has-EPUB td:last-child,
+table.convert-preview tr.action-already-has-AZW3 td:last-child,
+table.convert-preview tr.action-already-has-MOBI td:last-child { color: var(--muted); font-style: italic; }
+table.convert-preview tr.action-will-convert td:last-child { color: var(--good); }

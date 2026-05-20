@@ -3,22 +3,24 @@
 {% block main %}
 
 <form class="search" method="get" action="/">
-  <input type="text" name="q" placeholder="Search title or author" value="{{ q or '' }}">
+  <span class="search-input-wrap">
+    <input type="text" name="q" placeholder="Search title or author" value="{{ q or '' }}"
+           autocomplete="off"
+           hx-get="/search/suggestions"
+           hx-trigger="keyup changed delay:200ms"
+           hx-target="#search-suggestions"
+           hx-swap="innerHTML">
+    <div id="search-suggestions" class="suggestions"></div>
+  </span>
   <select name="tag">
     <option value="">All tags</option>
     {% for t in all_tags %}
       <option value="{{ t }}" {% if tag == t %}selected{% endif %}>{{ t }}</option>
     {% endfor %}
   </select>
-  <select name="author">
-    <option value="">All authors</option>
-    {% for a in all_authors %}
-      <option value="{{ a }}" {% if author == a %}selected{% endif %}>{{ a }}</option>
-    {% endfor %}
-  </select>
   <select name="sort">
-    {% for opt in ["title", "author", "date_added"] %}
-      <option value="{{ opt }}" {% if sort == opt %}selected{% endif %}>{{ opt }}</option>
+    {% for value, label in [("date_added", "Date Added"), ("title", "Title"), ("author", "Author")] %}
+      <option value="{{ value }}" {% if sort == value %}selected{% endif %}>{{ label }}</option>
     {% endfor %}
   </select>
   <select name="per_page">
@@ -31,14 +33,40 @@
 
 <div class="batch-bar">
   <span><strong id="selection-count">0</strong> selected</span>
-  <button form="batch-form" formaction="/batch/refresh?mode=fill_blanks" formmethod="post">Refresh metadata (fill blanks)</button>
-  <button form="batch-form" formaction="/batch/refresh?mode=overwrite" formmethod="post">Refresh metadata (overwrite)</button>
-  <button form="batch-form" formaction="/batch/convert?target=EPUB" formmethod="post">Convert → EPUB</button>
-  <button form="batch-form" formaction="/batch/convert?target=AZW3" formmethod="post">Convert → AZW3</button>
-  <button form="batch-form" formaction="/batch/convert?target=MOBI" formmethod="post">Convert → MOBI</button>
-  <button form="batch-form" formaction="/batch/send" formmethod="post">Send to device</button>
-  <button form="batch-form" formaction="/batch/remove" formmethod="post">Remove from device</button>
+  <button type="button" onclick="cwcOpenRefreshModal()">Refresh metadata</button>
+  <button type="button"
+          hx-post="/batch/convert/dialog"
+          hx-include="#batch-form"
+          hx-target="#modal-convert-body"
+          hx-swap="innerHTML"
+          hx-on::afterRequest="document.getElementById('modal-convert').showModal()">Convert</button>
+  <span class="cwc-device-only">
+    <button form="batch-form" formaction="/batch/send" formmethod="post">Send to device</button>
+    <button form="batch-form" formaction="/batch/remove" formmethod="post">Remove from device</button>
+  </span>
 </div>
+
+{% include "_fragments/refresh_modal.html" %}
+{% include "_fragments/convert_modal_shell.html" %}
+<script>
+  function cwcPickSuggestion(el) {
+    const form = el.closest('form.search');
+    if (!form) return;
+    form.querySelector('input[name=q]').value = el.dataset.value;
+    form.submit();
+  }
+  function cwcOpenRefreshModal() {
+    const dialog = document.getElementById('modal-refresh');
+    const slot = dialog.querySelector('.book-ids-slot');
+    slot.replaceChildren();
+    document.querySelectorAll('#batch-form input[name=book_id]:checked').forEach(cb => {
+      const h = document.createElement('input');
+      h.type = 'hidden'; h.name = 'book_id'; h.value = cb.value;
+      slot.appendChild(h);
+    });
+    dialog.showModal();
+  }
+</script>
 
 <form id="batch-form"></form>
 
@@ -57,15 +85,6 @@
     <a class="btn" href="?{{ query_str(page=page + 1) }}">Next →</a>
   {% endif %}
 </div>
-
-<details>
-  <summary>Upload books</summary>
-  <form action="/upload" method="post" enctype="multipart/form-data" class="upload-zone">
-    <p>Drop EPUB / AZW3 / MOBI / PDF files here, or pick:</p>
-    <input type="file" name="files" multiple accept=".epub,.azw3,.mobi,.pdf">
-    <button type="submit" class="primary">Upload</button>
-  </form>
-</details>
 
 <script>
   const sel = document.getElementById("selection-count");

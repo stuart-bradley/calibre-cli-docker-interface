@@ -157,7 +157,7 @@ def list_books(
     tag: str | None = None,
     series: str | None = None,
     format: str | None = None,
-    sort: SortKey = "title",
+    sort: SortKey = "date_added",
     page: int = 1,
     per_page: int = 48,
 ) -> tuple[list[Book], int]:
@@ -248,6 +248,37 @@ def get_format_path(library_path: Path, book_id: int, format: str) -> Path | Non
         return None
     candidate = library_path / row["path"] / f"{row['name']}.{format.lower()}"
     return candidate if candidate.exists() else None
+
+
+def search_suggestions(
+    library_path: Path, prefix: str, limit: int = 5,
+) -> tuple[list[str], list[str]]:
+    """Return ([titles], [authors]) matching prefix (case-insensitive).
+
+    Each table is searched on both its display column (title/name) AND its
+    sort column so 'Tch' finds 'Adrian Tchaikovsky' (sort='Tchaikovsky, Adrian')
+    and 'Wizard' finds 'A Wizard of Earthsea' (sort='Wizard of Earthsea, A').
+    """
+    escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = f"{escaped}%"
+    with connect(library_path) as conn:
+        titles = [
+            r["title"] for r in conn.execute(
+                "SELECT title FROM books "
+                "WHERE (title LIKE ? ESCAPE '\\' OR sort LIKE ? ESCAPE '\\') "
+                "COLLATE NOCASE ORDER BY sort LIMIT ?",
+                (like, like, limit),
+            )
+        ]
+        authors = [
+            r["name"] for r in conn.execute(
+                "SELECT name FROM authors "
+                "WHERE (name LIKE ? ESCAPE '\\' OR sort LIKE ? ESCAPE '\\') "
+                "COLLATE NOCASE ORDER BY sort LIMIT ?",
+                (like, like, limit),
+            )
+        ]
+    return titles, authors
 
 
 def get_cover_path(library_path: Path, book_id: int) -> Path | None:

@@ -1,0 +1,33 @@
+<dialog id="modal-upload" class="cwc-modal">
+  <form action="/upload" method="post" enctype="multipart/form-data" class="modal-form">
+    <h3>Upload books</h3>
+    <div class="dropzone" id="upload-dropzone">
+      <p>Drop EPUB / AZW3 / MOBI / PDF files here, or pick:</p>
+      <input type="file" name="files" id="upload-file-input"
+             multiple accept=".epub,.azw3,.mobi,.pdf,.kepub,.cbz,.cbr,.fb2,.lit">
+    </div>
+    <div class="modal-actions">
+      <button type="button" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="primary">Upload</button>
+    </div>
+  </form>
+  <script>
+    (function () {
+      const dz = document.getElementById('upload-dropzone');
+      const input = document.getElementById('upload-file-input');
+      if (!dz || !input) return;
+      dz.addEventListener('dragover', e => {
+        e.preventDefault();
+        dz.classList.add('dragging');
+      });
+      dz.addEventListener('dragleave', () => dz.classList.remove('dragging'));
+      dz.addEventListener('drop', e => {
+        e.preventDefault();
+        dz.classList.remove('dragging');
+        if (e.dataTransfer && e.dataTransfer.files) {
+          input.files = e.dataTransfer.files;
+        }
+      });
+    })();
+  </script>
+</dialog>

@@ -20,31 +20,41 @@
       {% endfor %}
     </ul>
     <div class="actions">
-      <form method="post" action="/batch/refresh?mode=fill_blanks">
+      <button type="button" onclick="cwcOpenRefreshModal({{ book.id }})">Refresh metadata</button>
+      <form id="detail-batch-form" style="display:none">
         <input type="hidden" name="book_id" value="{{ book.id }}">
-        <button>Refresh (fill blanks)</button>
       </form>
-      <form method="post" action="/batch/refresh?mode=overwrite">
-        <input type="hidden" name="book_id" value="{{ book.id }}">
-        <button>Refresh (overwrite)</button>
-      </form>
-      {% for target in ["EPUB", "AZW3", "MOBI"] %}
-        {% if target not in book.formats %}
-        <form method="post" action="/batch/convert?target={{ target }}">
+      <button type="button"
+              hx-post="/batch/convert/dialog"
+              hx-include="#detail-batch-form"
+              hx-target="#modal-convert-body"
+              hx-swap="innerHTML"
+              hx-on::afterRequest="document.getElementById('modal-convert').showModal()">Convert</button>
+      <span class="cwc-device-only">
+        <form method="post" action="/batch/send" style="display:inline">
           <input type="hidden" name="book_id" value="{{ book.id }}">
-          <button>Convert → {{ target }}</button>
+          <button>Send to device</button>
         </form>
-        {% endif %}
-      {% endfor %}
-      <form method="post" action="/batch/send">
-        <input type="hidden" name="book_id" value="{{ book.id }}">
-        <button>Send to device</button>
-      </form>
-      <form method="post" action="/batch/remove">
-        <input type="hidden" name="book_id" value="{{ book.id }}">
-        <button>Remove from device</button>
-      </form>
+        <form method="post" action="/batch/remove" style="display:inline">
+          <input type="hidden" name="book_id" value="{{ book.id }}">
+          <button>Remove from device</button>
+        </form>
+      </span>
     </div>
   </div>
 </div>
+
+{% include "_fragments/refresh_modal.html" %}
+{% include "_fragments/convert_modal_shell.html" %}
+<script>
+  function cwcOpenRefreshModal(bookId) {
+    const dialog = document.getElementById('modal-refresh');
+    const slot = dialog.querySelector('.book-ids-slot');
+    slot.replaceChildren();
+    const h = document.createElement('input');
+    h.type = 'hidden'; h.name = 'book_id'; h.value = String(bookId);
+    slot.appendChild(h);
+    dialog.showModal();
+  }
+</script>
 {% endblock %}

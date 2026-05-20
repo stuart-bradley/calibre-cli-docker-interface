@@ -1,0 +1,56 @@
+{# Inputs: books (list[Book]), available_targets (list[str]), per_target_preview (dict[str, list[{book_id, title, action}]]) #}
+<h3>Convert books</h3>
+
+{% if not available_targets %}
+  <p>All selected books already have all available target formats — nothing to convert.</p>
+  <div class="modal-actions">
+    <button type="button" onclick="this.closest('dialog').close()">Close</button>
+  </div>
+{% else %}
+  <form method="post" action="/batch/convert" class="modal-form">
+    {% for book in books %}
+      <input type="hidden" name="book_id" value="{{ book.id }}">
+    {% endfor %}
+
+    <fieldset>
+      <legend>Target format</legend>
+      {% for target in available_targets %}
+        <label>
+          <input type="radio" name="target" value="{{ target }}"
+                 {% if loop.first %}checked{% endif %}
+                 onchange="cwcConvertPreviewSwap(this.value)">
+          {{ target }}
+        </label>
+      {% endfor %}
+    </fieldset>
+
+    <div id="convert-preview-container">
+      {% for target in available_targets %}
+        <table class="convert-preview" data-target="{{ target }}"
+               {% if not loop.first %}hidden{% endif %}>
+          <thead><tr><th>Book</th><th>Action</th></tr></thead>
+          <tbody>
+            {% for row in per_target_preview[target] %}
+              <tr class="action-{{ row.action.replace(' ', '-') }}">
+                <td>{{ row.title }}</td>
+                <td>{{ row.action }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endfor %}
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="primary">Convert</button>
+    </div>
+  </form>
+  <script>
+    function cwcConvertPreviewSwap(target) {
+      document.querySelectorAll('#convert-preview-container .convert-preview').forEach(t => {
+        t.hidden = t.dataset.target !== target;
+      });
+    }
+  </script>
+{% endif %}

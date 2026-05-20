@@ -152,6 +152,96 @@ def test_refresh_overwrite_passes_all_fields(stub_run, run_calls):
     assert {"title", "authors", "comments", "series", "publisher", "tags"} <= set(field_names)
 
 
+def _refresh_with_cover_stub(monkeypatch, run_calls, *, existing_cover: Path | None):
+    """Stub `_run` so that fetch-ebook-metadata writes a fake cover when --cover= is passed.
+    Also stub db.get_cover_path to control "book has cover already" state."""
+    procs = {
+        "show_metadata": _cp(stdout=_OPF_WITH_TITLE_AND_AUTHOR),
+        "fetch": _cp(stdout=_OPF_FETCHED),
+        "set_cover": _cp(returncode=0),
+        "set_metadata": _cp(returncode=0),
+    }
+
+    def fake_run(argv, *, input=None):
+        run_calls.append(argv)
+        if argv[:2] == ["calibredb", "show_metadata"]:
+            return procs["show_metadata"]
+        if argv[0] == "fetch-ebook-metadata":
+            cover_flag = next((a for a in argv if a.startswith("--cover=")), None)
+            if cover_flag:
+                Path(cover_flag.split("=", 1)[1]).write_bytes(b"\xff\xd8\xff\xe0fake")
+            return procs["fetch"]
+        if argv[:2] == ["calibredb", "set_cover"]:
+            return procs["set_cover"]
+        if argv[:2] == ["calibredb", "set_metadata"]:
+            return procs["set_metadata"]
+        return _cp(returncode=0)
+
+    monkeypatch.setattr(calibre_cli, "_run", fake_run)
+
+    from app.services import db
+    monkeypatch.setattr(db, "get_cover_path", lambda lp, bid: existing_cover)
+
+
+def test_refresh_fetch_covers_true_passes_cover_flag(monkeypatch, run_calls, tmp_path):
+    _refresh_with_cover_stub(monkeypatch, run_calls, existing_cover=None)
+
+    calibre_cli.refresh_metadata(
+        LIB, 7, mode="fill_blanks", sources=["Amazon"], fetch_covers=True,
+    )
+
+    fetch_argv = next(a for a in run_calls if a[0] == "fetch-ebook-metadata")
+    assert any(a.startswith("--cover=") for a in fetch_argv)
+
+
+def test_refresh_fetch_covers_false_omits_cover_flag(monkeypatch, run_calls, tmp_path):
+    _refresh_with_cover_stub(monkeypatch, run_calls, existing_cover=None)
+
+    calibre_cli.refresh_metadata(
+        LIB, 7, mode="fill_blanks", sources=["Amazon"], fetch_covers=False,
+    )
+
+    fetch_argv = next(a for a in run_calls if a[0] == "fetch-ebook-metadata")
+    assert not any(a.startswith("--cover=") for a in fetch_argv)
+    assert not any(a[:2] == ["calibredb", "set_cover"] for a in run_calls)
+
+
+def test_refresh_fill_blanks_skips_set_cover_when_cover_exists(monkeypatch, run_calls, tmp_path):
+    fake_cover = tmp_path / "existing-cover.jpg"
+    fake_cover.write_bytes(b"existing")
+    _refresh_with_cover_stub(monkeypatch, run_calls, existing_cover=fake_cover)
+
+    calibre_cli.refresh_metadata(
+        LIB, 7, mode="fill_blanks", sources=["Amazon"], fetch_covers=True,
+    )
+
+    assert not any(a[:2] == ["calibredb", "set_cover"] for a in run_calls)
+
+
+def test_refresh_fill_blanks_applies_cover_when_missing(monkeypatch, run_calls):
+    _refresh_with_cover_stub(monkeypatch, run_calls, existing_cover=None)
+
+    result = calibre_cli.refresh_metadata(
+        LIB, 7, mode="fill_blanks", sources=["Amazon"], fetch_covers=True,
+    )
+
+    assert any(a[:2] == ["calibredb", "set_cover"] for a in run_calls)
+    assert "cover applied" in result.message
+
+
+def test_refresh_overwrite_always_applies_cover(monkeypatch, run_calls, tmp_path):
+    fake_cover = tmp_path / "existing-cover.jpg"
+    fake_cover.write_bytes(b"existing")
+    _refresh_with_cover_stub(monkeypatch, run_calls, existing_cover=fake_cover)
+
+    result = calibre_cli.refresh_metadata(
+        LIB, 7, mode="overwrite", sources=["Amazon"], fetch_covers=True,
+    )
+
+    assert any(a[:2] == ["calibredb", "set_cover"] for a in run_calls)
+    assert "cover applied" in result.message
+
+
 def test_refresh_no_match(stub_run):
     stub_run(
         _cp(stdout=_OPF_EMPTY),

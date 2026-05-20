@@ -81,6 +81,7 @@ def make_handlers(settings: Settings) -> dict[JobKind, JobHandler]:
     async def handle_refresh(job: Job) -> None:
         await _snapshot(settings)
         mode = job.params.get("mode", "fill_blanks")
+        fetch_covers = job.params.get("fetch_covers", True)
         for bp in job.progress:
             bp.title = await _title(settings, bp.book_id)
             bp.state = "running"
@@ -88,6 +89,7 @@ def make_handlers(settings: Settings) -> dict[JobKind, JobHandler]:
                 calibre_cli.refresh_metadata,
                 settings.library_path, bp.book_id,
                 mode=mode, sources=settings.metadata_sources,
+                fetch_covers=fetch_covers,
             )
             bp.message = result.message
             bp.state = "done" if result.state == "fetched" else result.state

@@ -28,11 +28,9 @@ def _resolve_per_page(
     return default, False
 
 
-def _all_authors_and_tags(library_path):
+def _all_tags(library_path):
     with db.connect(library_path) as conn:
-        authors = [r["name"] for r in conn.execute("SELECT name FROM authors ORDER BY sort")]
-        tags = [r["name"] for r in conn.execute("SELECT name FROM tags ORDER BY name")]
-    return authors, tags
+        return [r["name"] for r in conn.execute("SELECT name FROM tags ORDER BY name")]
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -44,7 +42,7 @@ def list_view(
     tag: str | None = None,
     series: str | None = None,
     format: str | None = None,
-    sort: str = "title",
+    sort: str = "date_added",
     page: int = Query(1, ge=1),
     per_page: int | None = Query(None, ge=1, le=200),
     settings: Settings = Depends(get_settings),
@@ -57,7 +55,7 @@ def list_view(
         sort=sort, page=page, per_page=resolved_per_page,
     )
     total_pages = max(1, (total + resolved_per_page - 1) // resolved_per_page)
-    all_authors, all_tags = _all_authors_and_tags(settings.library_path)
+    all_tags = _all_tags(settings.library_path)
 
     device_state: DeviceState = request.app.state.device_state
     on_device_ids = books_on_device(device_state, books)
@@ -83,7 +81,6 @@ def list_view(
             "per_page": resolved_per_page,
             "q": q, "author": author, "tag": tag,
             "sort": sort,
-            "all_authors": all_authors,
             "all_tags": all_tags,
             "device": device_state.detect,
             "on_device_ids": on_device_ids,
@@ -96,6 +93,24 @@ def list_view(
             max_age=COOKIE_MAX_AGE, samesite="lax", path="/",
         )
     return html
+
+
+@router.get("/search/suggestions", response_class=HTMLResponse)
+def search_suggestions(
+    request: Request,
+    q: str = "",
+    settings: Settings = Depends(get_settings),
+):
+    if len(q) < 2:
+        titles: list[str] = []
+        authors: list[str] = []
+    else:
+        titles, authors = db.search_suggestions(settings.library_path, q, limit=5)
+    return templates.TemplateResponse(
+        request,
+        "_fragments/search_suggestions.html",
+        {"titles": titles, "authors": authors},
+    )
 
 
 @router.get("/book/{book_id}", response_class=HTMLResponse)

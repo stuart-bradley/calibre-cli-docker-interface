@@ -2,7 +2,8 @@
       class="device-status {% if device and device.connected %}connected{% endif %}"
       hx-get="/device/status"
       hx-trigger="every 5s"
-      hx-swap="outerHTML">
+      hx-swap="outerHTML"
+      data-connected="{% if device and device.connected %}true{% else %}false{% endif %}">
   <span class="dot"></span>
   {% if device and device.connected %}
     Device connected: {{ device.device.name }}
@@ -10,3 +11,14 @@
     No device
   {% endif %}
 </span>
+<script>
+  (function () {
+    var s = document.getElementById('device-status');
+    if (!s) return;
+    if (s.dataset.connected === 'true') {
+      document.body.dataset.deviceConnected = 'true';
+    } else {
+      delete document.body.dataset.deviceConnected;
+    }
+  })();
+</script>

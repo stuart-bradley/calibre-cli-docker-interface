@@ -1,0 +1,11 @@
+{# Inputs: titles (list[str]), authors (list[str]). Renders an empty fragment when both lists empty so :empty CSS hides the dropdown. #}
+{% if titles or authors %}
+<ul class="suggestion-list">
+  {% for t in titles %}
+    <li class="suggestion" data-value="{{ t }}" onclick="cwcPickSuggestion(this)">Title: {{ t }}</li>
+  {% endfor %}
+  {% for a in authors %}
+    <li class="suggestion" data-value="{{ a }}" onclick="cwcPickSuggestion(this)">Author: {{ a }}</li>
+  {% endfor %}
+</ul>
+{% endif %}

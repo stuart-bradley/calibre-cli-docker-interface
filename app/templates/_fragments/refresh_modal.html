@@ -1,0 +1,41 @@
+<dialog id="modal-refresh" class="cwc-modal">
+  <form method="post" action="/batch/refresh" class="modal-form">
+    <h3>Refresh metadata</h3>
+    <span class="book-ids-slot"></span>
+
+    <fieldset>
+      <legend>Mode</legend>
+      <label><input type="radio" name="mode" value="fill_blanks" checked> Fill blanks only</label>
+      <label><input type="radio" name="mode" value="overwrite"> Overwrite all fields</label>
+    </fieldset>
+
+    <label class="checkbox-row">
+      <input type="checkbox" id="refresh-cover-cb" checked>
+      <span id="refresh-cover-label">Also fetch missing covers</span>
+    </label>
+    <input type="hidden" name="fetch_covers" id="refresh-cover-field" value="true">
+
+    <div class="modal-actions">
+      <button type="button" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="primary">Refresh</button>
+    </div>
+  </form>
+  <script>
+    (function () {
+      const dialog = document.getElementById('modal-refresh');
+      const cb = document.getElementById('refresh-cover-cb');
+      const field = document.getElementById('refresh-cover-field');
+      const label = document.getElementById('refresh-cover-label');
+      cb.addEventListener('change', () => {
+        field.value = cb.checked ? 'true' : 'false';
+      });
+      dialog.querySelectorAll('input[name=mode]').forEach(r => {
+        r.addEventListener('change', () => {
+          label.textContent = r.value === 'overwrite'
+            ? 'Replace existing covers'
+            : 'Also fetch missing covers';
+        });
+      });
+    })();
+  </script>
+</dialog>

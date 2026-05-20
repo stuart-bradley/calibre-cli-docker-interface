@@ -7,13 +7,14 @@
   <link rel="stylesheet" href="/static/calibre-web-cli.css">
   <script src="/static/htmx.min.js" defer></script>
 </head>
-<body>
+<body{% if device and device.connected %} data-device-connected="true"{% endif %}>
   <header class="app">
     <h1><a href="/">calibre-web-cli</a></h1>
     <nav>
       <a href="/">Library</a>
       <a href="/jobs">Jobs</a>
     </nav>
+    <button type="button" onclick="document.getElementById('modal-upload').showModal()">Upload books</button>
     <span style="flex:1"></span>
     <span id="device-status"
           hx-get="/device/status"
@@ -25,5 +26,6 @@
   <main>
     {% block main %}{% endblock %}
   </main>
+  {% include "_fragments/upload_modal.html" %}
 </body>
 </html>

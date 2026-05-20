@@ -94,15 +94,38 @@ async def test_handler_exception_marks_failed_and_keeps_running():
     assert good.state == "done"
 
 
-def test_fifo_eviction_at_cap():
+def test_fifo_eviction_only_evicts_terminal_jobs():
+    """Running and queued jobs must survive history rotation."""
     worker = Worker()
     ids = [worker.enqueue("upload", [i], {}).id for i in range(MAX_JOB_HISTORY + 5)]
 
-    assert len(worker._jobs) == MAX_JOB_HISTORY
-    # The first 5 should have been evicted.
-    for old in ids[:5]:
-        assert worker.get_job(old) is None
-    for kept in ids[5:]:
+    # Nothing terminal yet → cap is exceeded but no eviction.
+    assert len(worker._jobs) == MAX_JOB_HISTORY + 5
+    for kept in ids:
+        assert worker.get_job(kept) is not None
+
+    # Mark the oldest 10 as done. Next enqueue exceeds cap by 6 (106 total) and
+    # should evict the 6 oldest terminal entries — leaving 100.
+    for old in ids[:10]:
+        worker.get_job(old).state = "done"
+
+    new_job = worker.enqueue("upload", [999], {})
+
+    assert len(worker._jobs) == MAX_JOB_HISTORY  # cap exactly satisfied
+    for evicted in ids[:6]:
+        assert worker.get_job(evicted) is None
+    for kept in ids[6:]:
+        assert worker.get_job(kept) is not None
+    assert worker.get_job(new_job.id) is not None
+
+
+def test_fifo_eviction_defers_when_all_active():
+    """If every entry is queued/running, allow exceeding the cap rather than evict live jobs."""
+    worker = Worker()
+    ids = [worker.enqueue("upload", [i], {}).id for i in range(MAX_JOB_HISTORY + 3)]
+
+    assert len(worker._jobs) == MAX_JOB_HISTORY + 3
+    for kept in ids:
         assert worker.get_job(kept) is not None
 
 

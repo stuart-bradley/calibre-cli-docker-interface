@@ -72,10 +72,32 @@ class Worker:
             progress=[BookProgress(book_id=b, title="") for b in book_ids],
         )
         self._jobs[job.id] = job
-        while len(self._jobs) > MAX_JOB_HISTORY:
-            self._jobs.popitem(last=False)
+        self._evict_terminal()
         self._queue.put_nowait(job)
         return job
+
+    def _evict_terminal(self) -> None:
+        """Evict the oldest done/failed jobs to keep _jobs within cap.
+
+        Never evicts queued or running jobs — those are still visible to /jobs
+        and must survive history rotation until they reach a terminal state.
+        """
+        excess = len(self._jobs) - MAX_JOB_HISTORY
+        if excess <= 0:
+            return
+        terminal = ("done", "failed")
+        for job_id in list(self._jobs.keys()):
+            if excess <= 0:
+                break
+            if self._jobs[job_id].state in terminal:
+                del self._jobs[job_id]
+                excess -= 1
+        # If we still exceed cap, every entry is non-terminal — log and accept.
+        if len(self._jobs) > MAX_JOB_HISTORY:
+            log.warning(
+                "job history at %d (cap %d) — all active, eviction deferred",
+                len(self._jobs), MAX_JOB_HISTORY,
+            )
 
     def get_job(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)

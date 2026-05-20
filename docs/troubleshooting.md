@@ -8,7 +8,7 @@ Stop the container, copy the most recent snapshot over the live file, restart.
 docker stop calibre-web-cli
 ls data/snapshots/
 # pick the latest, e.g. metadata-2026-05-19.db
-cp data/snapshots/metadata-2026-05-19.db "$LIBRARY_PATH/metadata.db"
+cp data/snapshots/metadata-2026-05-19.db "$LIBRARY_HOST_PATH/metadata.db"
 docker start calibre-web-cli
 ```
 
@@ -45,8 +45,8 @@ If it still fails, check <https://calibre-ebook.com/download_linux> for an outag
 
 The container's UID can't write to the bind-mounted library. Either:
 
-- Set `PUID`/`PGID` in `.env` to match the owner of your `Calibre Library` directory on the host (`stat -c '%u:%g' "$LIBRARY_PATH"`).
-- Or `sudo chown -R <PUID>:<PGID> "$LIBRARY_PATH"` on the host.
+- Set `PUID`/`PGID` in `.env` to match the owner of your `Calibre Library` directory on the host (`stat -c '%u:%g' "$LIBRARY_HOST_PATH"`).
+- Or `sudo chown -R <PUID>:<PGID> "$LIBRARY_HOST_PATH"` on the host.
 
 The app needs write access because `calibredb` creates and removes files inside the library directory.
 
@@ -63,7 +63,7 @@ If sustained slowness:
 
 `docker logs calibre-web-cli`. Common causes:
 
-- `LIBRARY_PATH` doesn't exist on the host or doesn't contain `metadata.db`.
+- `LIBRARY_HOST_PATH` doesn't exist on the host or doesn't contain `metadata.db`.
 - Port conflict (something else on `CALIBRE_WEB_CLI_PORT`).
 - Calibre install failed inside the image — see "Build fails" above.
 
@@ -72,3 +72,29 @@ If sustained slowness:
 - Confirm the env var is being read by the container: `docker exec calibre-web-cli env | grep CALIBRE_WEB_CLI_PASSWORD`.
 - Confirm you're not hitting `/health` or `/static/*` — those are exempt by design (Docker healthcheck and asset serving).
 - Restart the container — `BasicAuthMiddleware` is configured at app startup.
+
+## Running `calibredb` ad-hoc — exec, don't `--entrypoint`
+
+`docker run --rm --entrypoint calibredb <image> --library-path /books list` can
+segfault on older kernels (observed: `munmap_chunk(): invalid pointer` on the
+DS218+ DSM 7.x kernel). The entrypoint script sets up `LD_LIBRARY_PATH` and
+drops to the right UID before exec — bypassing it leaves Calibre running with
+a stripped environment.
+
+Use the already-running container instead:
+
+```bash
+docker exec calibre-web-cli calibredb --library-path /books list
+docker exec calibre-web-cli calibredb --library-path /books check_library
+```
+
+## `restore_database` fails with `FileNotFoundError: '/books/.calnotes'`
+
+This is an upstream Calibre quirk — `restore_database` walks the library and
+expects a `.calnotes/` directory even on libraries that never had any notes.
+Create the directory and re-run:
+
+```bash
+mkdir "$LIBRARY_HOST_PATH/.calnotes"
+docker exec calibre-web-cli calibredb --library-path /books restore_database
+```

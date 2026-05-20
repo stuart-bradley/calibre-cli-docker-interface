@@ -27,10 +27,10 @@ This is a tight, single-user, single-purpose tool. If you want a reader or multi
 ## Quick start
 
 ```bash
-gh repo clone stuart-bradley/calibre-cli-docker-interface
+git clone https://github.com/stuart-bradley/calibre-cli-docker-interface
 cd calibre-cli-docker-interface
 cp .env.example .env
-# edit LIBRARY_PATH (absolute path to your Calibre library)
+# edit LIBRARY_HOST_PATH (absolute path to your Calibre library on the host)
 # optionally set CALIBRE_WEB_CLI_PASSWORD if not on a fully trusted LAN
 docker compose up -d
 open http://localhost:8084
@@ -42,11 +42,12 @@ For a published image: `docker pull ghcr.io/stuart-bradley/calibre-cli-docker-in
 
 ## Configuration reference
 
-All settings are environment variables. Sensible defaults; the only required one is `LIBRARY_PATH`.
+All settings are environment variables. Sensible defaults; the only required one is `LIBRARY_HOST_PATH`.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `LIBRARY_PATH` | *(required)* | Absolute host path to your Calibre library directory (contains `metadata.db`). |
+| `LIBRARY_HOST_PATH` | *(required)* | Absolute host path to your Calibre library directory (contains `metadata.db`). Bind-mounted to `/books` in the container. Host-side only — not passed into the container env. |
+| `LIBRARY_PATH` | `/books` | In-container library path. Defaults to the bind-mount target; override only for local non-container development. |
 | `PUID` | `1000` | UID the container runs as. `id -u` on the host. |
 | `PGID` | `1000` | GID the container runs as. `id -g` on the host. |
 | `TZ` | `Europe/London` | IANA timezone — used for snapshot date-stamping. |
@@ -102,7 +103,7 @@ All 11 pass = ship it.
 - **Recover a corrupted `metadata.db`**:
   ```bash
   docker stop calibre-web-cli
-  cp data/snapshots/metadata-YYYY-MM-DD.db "$LIBRARY_PATH/metadata.db"
+  cp data/snapshots/metadata-YYYY-MM-DD.db "$LIBRARY_HOST_PATH/metadata.db"
   docker start calibre-web-cli
   ```
 

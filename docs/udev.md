@@ -58,4 +58,4 @@ sudo udevadm trigger
 
 ## Why this and not `privileged: true`?
 
-`privileged: true` gives the container access to everything on the host — overkill, and it breaks on some kernels (notably the Synology DSM 4.x kernel can't handle `pidfd_open` if anything inside the container tries to start a dockerd). The udev-rule approach grants the minimum: read/write on USB device nodes, nothing else.
+`privileged: true` gives the container access to everything on the host — overkill, and it breaks on the Linux 4.4 kernel that DSM 7.x still ships on older Synology hardware (like the DS218+). That kernel can't handle `pidfd_open` and a few other modern syscalls; anything inside a privileged container that tries to start its own dockerd or use nf_tables will crash-loop. The udev-rule approach grants the minimum: read/write on USB device nodes, nothing else.

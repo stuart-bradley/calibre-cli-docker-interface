@@ -12,7 +12,7 @@ Most Synology users keep their Calibre library under one of:
 /volume1/calibre/Calibre Library
 ```
 
-Run `find /volume1 -name metadata.db 2>/dev/null` to locate it. Put the full path into `LIBRARY_PATH` in `.env` (quote it if it contains spaces, which the default Calibre path does).
+Run `find /volume1 -name metadata.db 2>/dev/null` to locate it. Put the full path into `LIBRARY_HOST_PATH` in `.env` (quote it if it contains spaces, which the default Calibre path does). Inside the container the library is always mounted at `/books`, so don't set `LIBRARY_PATH` itself — that variable is only relevant for local non-container development.
 
 If your library lives under `/volume1/homes/...`, that path is usually in DSM's cloud-backup scope — handy, but means the snapshot mechanism in this app is a defence-in-depth layer rather than your only safety net.
 
@@ -45,7 +45,7 @@ cd /volume1/docker
 git clone https://github.com/stuart-bradley/calibre-cli-docker-interface
 cd calibre-cli-docker-interface
 cp .env.example .env
-vi .env       # set LIBRARY_PATH, PUID, PGID, TZ
+vi .env       # set LIBRARY_HOST_PATH, PUID, PGID, TZ
 sudo docker compose up -d
 ```
 

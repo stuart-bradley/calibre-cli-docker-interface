@@ -7,7 +7,9 @@ from fastapi.responses import HTMLResponse
 
 from app.config import Settings, get_settings
 from app.services import db
+from app.services.device import books_on_device
 from app.state import DeviceState
+from app.templating import templates
 
 router = APIRouter()
 
@@ -47,8 +49,6 @@ def list_view(
     per_page: int | None = Query(None, ge=1, le=200),
     settings: Settings = Depends(get_settings),
 ):
-    from app.main import templates  # avoid circular import
-
     resolved_per_page, set_cookie = _resolve_per_page(request, per_page, settings.page_size)
 
     books, total = db.list_books(
@@ -60,15 +60,7 @@ def list_view(
     all_authors, all_tags = _all_authors_and_tags(settings.library_path)
 
     device_state: DeviceState = request.app.state.device_state
-    on_device_ids: set[int] = set()
-    if device_state.on_device_filenames and books:
-        wanted = device_state.on_device_filenames
-        for b in books:
-            for fmt in b.formats:
-                candidate = db.get_format_path(settings.library_path, b.id, fmt)
-                if candidate is not None and candidate.name in wanted:
-                    on_device_ids.add(b.id)
-                    break
+    on_device_ids = books_on_device(device_state, books)
 
     def query_str(**overrides):
         params = {
@@ -112,8 +104,6 @@ def detail_view(
     request: Request,
     settings: Settings = Depends(get_settings),
 ):
-    from app.main import templates
-
     book = db.get_book(settings.library_path, book_id)
     if book is None:
         raise HTTPException(404)

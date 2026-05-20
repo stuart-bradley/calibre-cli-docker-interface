@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -13,7 +14,10 @@ SortKey = Literal["title", "author", "date_added"]
 _SORT_SQL: dict[SortKey, str] = {
     "title": "b.sort COLLATE NOCASE ASC",
     "author": "b.author_sort COLLATE NOCASE ASC",
-    "date_added": "b.timestamp DESC",
+    # Calibre's `books.timestamp` is not indexed in the stock schema, but `books.id`
+    # is monotonic with insert time so it's a free index-backed proxy for "recently
+    # added" that scales as the library grows.
+    "date_added": "b.id DESC",
 }
 
 
@@ -26,6 +30,7 @@ class Book:
     series: str | None
     series_index: float | None
     formats: list[str]
+    format_filenames: dict[str, str]  # FORMAT -> {data.name}.{ext.lower()}
     path: str
     has_cover: bool
     timestamp: datetime
@@ -56,56 +61,91 @@ def _parse_dt(value: str | datetime | None) -> datetime | None:
         return None
 
 
-def _book_from_row(row: sqlite3.Row, conn: sqlite3.Connection) -> Book:
+def _placeholders(n: int) -> str:
+    return ",".join("?" * n)
+
+
+def _fetch_book_aux(
+    conn: sqlite3.Connection, book_ids: list[int],
+) -> tuple[dict[int, list[str]], dict[int, list[str]], dict[int, tuple[str, float | None]],
+           dict[int, list[tuple[str, str]]], dict[int, dict[str, str]]]:
+    """Single-pass fetch of authors/tags/series/data/identifiers for a page of books.
+
+    Returns five dicts keyed by book id. Each is the only query of its kind for
+    the whole page, eliminating the N+1 _book_from_row pattern.
+    """
+    authors: dict[int, list[str]] = defaultdict(list)
+    tags: dict[int, list[str]] = defaultdict(list)
+    series: dict[int, tuple[str, float | None]] = {}
+    data: dict[int, list[tuple[str, str]]] = defaultdict(list)
+    identifiers: dict[int, dict[str, str]] = defaultdict(dict)
+
+    if not book_ids:
+        return authors, tags, series, data, identifiers
+
+    ph = _placeholders(len(book_ids))
+    params = list(book_ids)
+
+    for r in conn.execute(
+        f"SELECT bal.book AS book, a.name AS name FROM authors a "
+        f"JOIN books_authors_link bal ON bal.author = a.id "
+        f"WHERE bal.book IN ({ph}) ORDER BY a.sort",
+        params,
+    ):
+        authors[r["book"]].append(r["name"])
+
+    for r in conn.execute(
+        f"SELECT btl.book AS book, t.name AS name FROM tags t "
+        f"JOIN books_tags_link btl ON btl.tag = t.id "
+        f"WHERE btl.book IN ({ph}) ORDER BY t.name",
+        params,
+    ):
+        tags[r["book"]].append(r["name"])
+
+    for r in conn.execute(
+        f"SELECT bsl.book AS book, s.name AS name, b.series_index AS series_index "
+        f"FROM series s "
+        f"JOIN books_series_link bsl ON bsl.series = s.id "
+        f"JOIN books b ON b.id = bsl.book "
+        f"WHERE bsl.book IN ({ph})",
+        params,
+    ):
+        series[r["book"]] = (r["name"], r["series_index"])
+
+    for r in conn.execute(
+        f"SELECT book, format, name FROM data WHERE book IN ({ph}) ORDER BY format",
+        params,
+    ):
+        data[r["book"]].append((r["format"].upper(), r["name"]))
+
+    for r in conn.execute(
+        f"SELECT book, type, val FROM identifiers WHERE book IN ({ph})", params,
+    ):
+        identifiers[r["book"]][r["type"]] = r["val"]
+
+    return authors, tags, series, data, identifiers
+
+
+def _book_from_row(row: sqlite3.Row, aux: tuple) -> Book:
+    authors, tags, series, data, identifiers = aux
     book_id = row["id"]
-    authors = [
-        r["name"]
-        for r in conn.execute(
-            "SELECT a.name FROM authors a "
-            "JOIN books_authors_link bal ON bal.author = a.id "
-            "WHERE bal.book = ? ORDER BY a.sort",
-            (book_id,),
-        )
-    ]
-    tags = [
-        r["name"]
-        for r in conn.execute(
-            "SELECT t.name FROM tags t "
-            "JOIN books_tags_link btl ON btl.tag = t.id "
-            "WHERE btl.book = ? ORDER BY t.name",
-            (book_id,),
-        )
-    ]
-    series_row = conn.execute(
-        "SELECT s.name FROM series s "
-        "JOIN books_series_link bsl ON bsl.series = s.id "
-        "WHERE bsl.book = ?",
-        (book_id,),
-    ).fetchone()
-    formats = [
-        r["format"].upper()
-        for r in conn.execute(
-            "SELECT format FROM data WHERE book = ? ORDER BY format",
-            (book_id,),
-        )
-    ]
-    identifiers = {
-        r["type"]: r["val"]
-        for r in conn.execute("SELECT type, val FROM identifiers WHERE book = ?", (book_id,))
-    }
+    formats_data = data.get(book_id, [])
+    format_filenames = {fmt: f"{name}.{fmt.lower()}" for fmt, name in formats_data}
+    series_pair = series.get(book_id)
     return Book(
         id=book_id,
         title=row["title"],
-        authors=authors,
-        tags=tags,
-        series=series_row["name"] if series_row else None,
-        series_index=row["series_index"] if series_row else None,
-        formats=formats,
+        authors=authors.get(book_id, []),
+        tags=tags.get(book_id, []),
+        series=series_pair[0] if series_pair else None,
+        series_index=series_pair[1] if series_pair else None,
+        formats=[fmt for fmt, _ in formats_data],
+        format_filenames=format_filenames,
         path=row["path"],
         has_cover=bool(row["has_cover"]),
         timestamp=_parse_dt(row["timestamp"]) or datetime.min,
         pubdate=_parse_dt(row["pubdate"]),
-        identifiers=identifiers,
+        identifiers=identifiers.get(book_id, {}),
     )
 
 
@@ -181,7 +221,8 @@ def list_books(
             [*params, per_page, offset],
         ).fetchall()
 
-        books = [_book_from_row(r, conn) for r in rows]
+        aux = _fetch_book_aux(conn, [r["id"] for r in rows])
+        books = [_book_from_row(r, aux) for r in rows]
 
     return books, total
 
@@ -191,7 +232,8 @@ def get_book(library_path: Path, book_id: int) -> Book | None:
         row = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
         if row is None:
             return None
-        return _book_from_row(row, conn)
+        aux = _fetch_book_aux(conn, [book_id])
+        return _book_from_row(row, aux)
 
 
 def get_format_path(library_path: Path, book_id: int, format: str) -> Path | None:

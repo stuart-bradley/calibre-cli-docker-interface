@@ -7,7 +7,7 @@ name = "calibre-cli-docker-interface"
 version = "0.0.1"
 description = "Lightweight dockerised interface for calibre cli for use on resource constrained devices"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Stuart Bradley", email = "stuy.bradley@gmail.com" }]
 dependencies = [
@@ -31,7 +31,7 @@ packages = ["app"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

@@ -25,7 +25,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Calibre from upstream — pinned version, SHA256-verified per arch.
 # Pulling the tarball directly (instead of the wget|sh installer) lets us pin
-# and verify; the installer is just a thin wrapper around this anyway.
+# and verify; the installer is just a thin wrapper around this anyway. After
+# extraction the binaries (calibre, calibredb, ebook-convert, fetch-ebook-metadata,
+# calibre-debug, ...) live under /opt/calibre and are already executable —
+# symlink each into /usr/local/bin so they're on PATH without modifying the env.
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -39,7 +42,14 @@ RUN set -eux; \
     mkdir -p /opt/calibre; \
     tar -xJf /tmp/calibre.txz -C /opt/calibre; \
     rm /tmp/calibre.txz; \
-    /opt/calibre/calibre_postinstall --bin-pattern '*' --no-update-mime-database; \
+    for bin in calibre calibredb ebook-convert ebook-meta ebook-viewer ebook-edit \
+               ebook-polish ebook-device fetch-ebook-metadata lrf2lrs lrs2lrf \
+               calibre-server calibre-smtp calibre-customize calibre-debug \
+               markdown-calibre web2disk; do \
+        if [ -f "/opt/calibre/$bin" ]; then \
+            ln -sf "/opt/calibre/$bin" "/usr/local/bin/$bin"; \
+        fi; \
+    done; \
     command -v calibre-debug; \
     command -v calibredb; \
     command -v ebook-convert; \

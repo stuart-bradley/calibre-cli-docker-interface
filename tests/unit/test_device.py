@@ -123,15 +123,12 @@ _FAKE_KINDLE = mtp_helper.Device(name="Amazon Amazon Kindle", vid="1949", pid="9
 
 
 async def test_poll_clears_state_when_device_not_on_bus(monkeypatch, tmp_path):
-    """When the Kindle drops off the USB bus, the poller must clear detect
-    state and the file cache, and reset files_fetched so the next reconnect
-    will re-list."""
+    """When the Kindle drops off the USB bus, the poller clears detect state
+    and the optimistic-update file cache."""
     _patch_sysfs_returns(monkeypatch, None)
-    list_calls: list[int] = []
 
     async def fake_list(**kw):
-        list_calls.append(1)
-        return []
+        raise AssertionError("list_files must not be called by the poller")
 
     monkeypatch.setattr(mtp_helper, "list_files", fake_list)
 
@@ -139,156 +136,75 @@ async def test_poll_clears_state_when_device_not_on_bus(monkeypatch, tmp_path):
     state = _make_state(
         detect=mtp_helper.DetectResult(connected=True, device=_FAKE_KINDLE),
         on_device_filenames={"old-book.epub"},
-        files_fetched=True,
     )
 
     await device._poll_tick(settings, state)
 
-    assert list_calls == []  # MTP never opened
     assert state.detect is None
     assert state.on_device_filenames == set()
-    assert state.files_fetched is False
     assert state.last_detect_error is None
     assert state.has_polled is True
 
 
-async def test_poll_first_tick_with_device_present_lists_files_once(monkeypatch, tmp_path):
-    """First poll tick after device appears on the bus: synthesize DetectResult
-    from sysfs, then open MTP exactly once to populate the on-device cache."""
+async def test_poll_present_never_calls_list_files(monkeypatch, tmp_path):
+    """Empirical regression test: a single mtp_helper.list_files() call from
+    inside the container is enough to drop the jailbroken Kindle off the USB
+    bus for minutes (see fix v2 plan). The poller must NEVER open MTP, even
+    on the first tick after the device appears."""
     _patch_sysfs_returns(monkeypatch, _FAKE_KINDLE)
-    list_calls: list[int] = []
 
     async def fake_list(**kw):
-        list_calls.append(1)
-        return [
-            mtp_helper.FileEntry(path="documents/foo.epub", size=10),
-            mtp_helper.FileEntry(path="documents/bar.mobi", size=20),
-        ]
+        raise AssertionError("list_files must not be called by the poller")
 
     monkeypatch.setattr(mtp_helper, "list_files", fake_list)
 
     settings = _settings_with_ids(monkeypatch, tmp_path)
-    state = _make_state()  # fresh: detect=None, files_fetched=False
+    state = _make_state()  # fresh: detect=None, no cache
 
     await device._poll_tick(settings, state)
+    await device._poll_tick(settings, state)  # second tick — still no MTP
 
-    assert list_calls == [1]
     assert state.detect is not None
     assert state.detect.connected is True
     assert state.detect.device == _FAKE_KINDLE
-    assert state.on_device_filenames == {"foo.epub", "bar.mobi"}
-    assert state.files_fetched is True
+    assert state.on_device_filenames == set()
     assert state.last_detect_error is None
 
 
-async def test_poll_skips_mtp_in_steady_state(monkeypatch, tmp_path):
-    """Regression for the Kindle-disconnect bug: when the device is on the bus
-    AND files_fetched is True, the poller must NOT re-open MTP. Each MTP open
-    causes the jailbroken Kindle firmware to drop the device."""
+async def test_poll_preserves_filename_cache_across_ticks(monkeypatch, tmp_path):
+    """The optimistic cache populated by handlers.handle_send must survive
+    every subsequent poll tick (so badges stay visible). The poller only
+    clears the cache when the device leaves the bus."""
     _patch_sysfs_returns(monkeypatch, _FAKE_KINDLE)
-    list_calls: list[int] = []
 
     async def fake_list(**kw):
-        list_calls.append(1)
-        return []
+        raise AssertionError("list_files must not be called by the poller")
 
     monkeypatch.setattr(mtp_helper, "list_files", fake_list)
 
     settings = _settings_with_ids(monkeypatch, tmp_path)
-    state = _make_state(
-        detect=mtp_helper.DetectResult(connected=True, device=_FAKE_KINDLE),
-        on_device_filenames={"cached.epub"},
-        files_fetched=True,
-    )
+    state = _make_state(on_device_filenames={"foo.epub", "bar.mobi"})
 
     await device._poll_tick(settings, state)
-
-    assert list_calls == []
-    # state.detect is refreshed from sysfs each tick, but the cache is untouched.
-    assert state.detect is not None and state.detect.connected is True
-    assert state.on_device_filenames == {"cached.epub"}
-    assert state.files_fetched is True
-
-
-async def test_poll_list_files_error_sets_files_fetched_to_avoid_retry_loop(monkeypatch, tmp_path):
-    """If list_files fails, files_fetched must still be True so the next tick
-    doesn't retry — each retry would re-trigger the firmware disconnect. The
-    user can replug to retry."""
-    _patch_sysfs_returns(monkeypatch, _FAKE_KINDLE)
-    list_calls: list[int] = []
-
-    async def fake_list(**kw):
-        list_calls.append(1)
-        raise mtp_helper.MTPHelperError("libmtp boom")
-
-    monkeypatch.setattr(mtp_helper, "list_files", fake_list)
-
-    settings = _settings_with_ids(monkeypatch, tmp_path)
-    state = _make_state()
+    assert state.on_device_filenames == {"foo.epub", "bar.mobi"}
 
     await device._poll_tick(settings, state)
+    assert state.on_device_filenames == {"foo.epub", "bar.mobi"}
 
-    assert list_calls == [1]
-    assert state.detect is not None and state.detect.connected is True
-    assert state.on_device_filenames == set()
-    assert state.files_fetched is True
-    assert state.last_detect_error == "libmtp boom"
-
-    # Second tick must NOT retry list_files.
-    await device._poll_tick(settings, state)
-    assert list_calls == [1]
-
-
-async def test_poll_relists_after_device_leaves_and_returns(monkeypatch, tmp_path):
-    """Full session cycle: connect → cache populated → unplug → replug → cache
-    re-populated."""
-
-    # Tick 1: device on bus, fresh state, list_files runs.
-    _patch_sysfs_returns(monkeypatch, _FAKE_KINDLE)
-    list_calls: list[int] = []
-
-    async def fake_list(**kw):
-        list_calls.append(1)
-        return [mtp_helper.FileEntry(path=f"documents/book{len(list_calls)}.epub", size=1)]
-
-    monkeypatch.setattr(mtp_helper, "list_files", fake_list)
-
-    settings = _settings_with_ids(monkeypatch, tmp_path)
-    state = _make_state()
-
-    await device._poll_tick(settings, state)
-    assert state.files_fetched is True
-    assert state.on_device_filenames == {"book1.epub"}
-
-    # Tick 2: still on bus — no MTP.
-    await device._poll_tick(settings, state)
-    assert list_calls == [1]
-
-    # Tick 3: device leaves bus — state cleared.
+    # Device leaves the bus — only now is the cache cleared.
     _patch_sysfs_returns(monkeypatch, None)
     await device._poll_tick(settings, state)
-    assert state.detect is None
-    assert state.files_fetched is False
     assert state.on_device_filenames == set()
-
-    # Tick 4: device returns — list_files runs again with fresh listing.
-    _patch_sysfs_returns(monkeypatch, _FAKE_KINDLE)
-    await device._poll_tick(settings, state)
-    assert list_calls == [1, 1]
-    assert state.on_device_filenames == {"book2.epub"}
 
 
 async def test_poll_with_empty_ids_treats_device_as_absent(monkeypatch, tmp_path):
-    """Empty CALIBRE_WEB_CLI_MTP_USB_IDS: detection always returns None, no MTP
-    calls. Real sysfs would still see the device but we can't identify it."""
-    # Don't patch _detect_kindle_via_sysfs — let it run with the real impl.
-    # Use an empty sysfs dir so even if it tries to scan it gets nothing.
+    """Empty CALIBRE_WEB_CLI_MTP_USB_IDS: detection always returns None. The
+    real sysfs scan is exercised here (not the monkeypatched fake) to confirm
+    the empty-filter short-circuit."""
     monkeypatch.setattr(device, "_SYSFS_USB_DEVICES", tmp_path)
-    list_calls: list[int] = []
 
     async def fake_list(**kw):
-        list_calls.append(1)
-        return []
+        raise AssertionError("list_files must not be called by the poller")
 
     monkeypatch.setattr(mtp_helper, "list_files", fake_list)
 
@@ -298,21 +214,18 @@ async def test_poll_with_empty_ids_treats_device_as_absent(monkeypatch, tmp_path
 
     await device._poll_tick(settings, state)
 
-    assert list_calls == []
     assert state.detect is None
-    assert state.files_fetched is False
     assert state.has_polled is True
 
 
 async def test_poll_unexpected_exception_does_not_kill_loop(monkeypatch, tmp_path):
-    """An unexpected exception from list_files (something other than
-    MTPHelperError) must be caught so poll_device_loop keeps ticking."""
-    _patch_sysfs_returns(monkeypatch, _FAKE_KINDLE)
+    """An unexpected exception from the sysfs detector must be caught so
+    poll_device_loop keeps ticking."""
 
-    async def fake_list(**kw):
-        raise RuntimeError("unexpected")
+    def boom(_ids):
+        raise RuntimeError("sysfs blew up")
 
-    monkeypatch.setattr(mtp_helper, "list_files", fake_list)
+    monkeypatch.setattr(device, "_detect_kindle_via_sysfs", boom)
 
     settings = _settings_with_ids(monkeypatch, tmp_path)
     state = _make_state()
@@ -322,7 +235,6 @@ async def test_poll_unexpected_exception_does_not_kill_loop(monkeypatch, tmp_pat
 
     assert state.detect is None
     assert state.on_device_filenames == set()
-    assert state.files_fetched is False
     assert state.last_detect_error is not None
     assert "RuntimeError" in state.last_detect_error
     assert state.has_polled is True

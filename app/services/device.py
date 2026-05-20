@@ -11,7 +11,6 @@ import logging
 from pathlib import Path
 
 from app.config import Settings
-from app.services import mtp_helper
 from app.services.mtp_helper import DetectResult, Device
 from app.state import DeviceState
 
@@ -80,15 +79,19 @@ async def _poll_tick(settings: Settings, state: DeviceState) -> None:
     """One iteration of the device-state poll. Extracted from the loop so tests
     can drive it directly without orchestrating ``asyncio.sleep``.
 
-    Single-session MTP-open contract: presence is detected from sysfs every
-    tick, and ``mtp_helper.list_files()`` runs at most once per session (where
-    "session" = device continuously visible on the USB bus). ``files_fetched``
-    is set *before* the call returns so a libmtp error doesn't retry every
-    tick — each retry would re-trigger the firmware disconnect.
+    Presence-only contract: this function NEVER opens MTP. Empirically, even
+    a single ``mtp_helper.list_files()`` from inside the container is enough
+    to drop the jailbroken Kindle MTP firmware off the USB bus for minutes,
+    sometimes indefinitely (the previous "list once per session" attempt at
+    f83b48f confirmed this). The poller's job here is reduced to:
+
+    * synthesize ``state.detect`` from sysfs (truth-of-presence)
+    * preserve ``state.on_device_filenames`` across ticks while the device is
+      present — that cache is populated **only** by the optimistic add/discard
+      in :mod:`app.handlers` after a user-initiated send/remove.
 
     ``CancelledError`` is re-raised so shutdown still works. Any other
-    exception is caught and recorded so a single poll error doesn't kill the
-    loop forever.
+    exception is caught and recorded so one bad tick can't kill the loop.
     """
     try:
         detected = _detect_kindle_via_sysfs(settings.mtp_usb_ids)
@@ -97,41 +100,27 @@ async def _poll_tick(settings: Settings, state: DeviceState) -> None:
                 log.debug("device left USB bus; clearing detect state")
             state.detect = None
             state.on_device_filenames = set()
-            state.files_fetched = False
             state.last_detect_error = None
             return
-        # Device on bus — synthesize the connected state from sysfs. No MTP probe.
+        # Device on bus — synthesize the connected state from sysfs. No MTP, ever.
         state.detect = DetectResult(connected=True, device=detected)
-        if state.files_fetched:
-            return  # steady state; on_device_filenames already cached
-        state.files_fetched = True  # set first so a failure doesn't retry-loop
-        try:
-            files = await mtp_helper.list_files()
-        except mtp_helper.MTPHelperError as exc:
-            log.warning("initial mtp list_files failed: %s", exc)
-            state.last_detect_error = str(exc)
-            state.on_device_filenames = set()
-        else:
-            state.on_device_filenames = {Path(f.path).name for f in files}
-            state.last_detect_error = None
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         log.exception("device poller tick failed; continuing")
         state.detect = None
         state.on_device_filenames = set()
-        state.files_fetched = False
         state.last_detect_error = f"{type(exc).__name__}: {exc}"
     finally:
         state.has_polled = True
 
 
 async def poll_device_loop(settings: Settings, state: DeviceState, interval: float = 5.0) -> None:
-    """Watch for device presence and refresh on-device state on transitions.
+    """Watch for device presence by polling sysfs.
 
-    Steady-state behaviour avoids opening MTP sessions: sysfs USB-presence
-    runs every tick, and ``mtp_helper.list_files()`` runs at most once per
-    USB-presence session. See :func:`_detect_kindle_via_sysfs` for why.
+    The poller never opens MTP — see :func:`_poll_tick` and
+    :func:`_detect_kindle_via_sysfs` for why. The on-device filename cache is
+    maintained by :mod:`app.handlers` (optimistic update after send/remove).
     """
     while True:
         await _poll_tick(settings, state)

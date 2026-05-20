@@ -14,14 +14,11 @@ from app.services.mtp_helper import DetectResult
 @dataclass
 class DeviceState:
     detect: DetectResult | None = None
+    # Populated only by the optimistic add/discard in app.handlers after a
+    # user-initiated send/remove. The poller never lists files (see
+    # services.device for the firmware-bricks-on-MTP-open rationale), so
+    # badges for books already on the device pre-app are not shown.
     on_device_filenames: set[str] = field(default_factory=set)
-    # True once we've successfully listed the device's files for the current
-    # USB-presence session. Gates the one-and-only MTP open the poller makes:
-    # set to True before the call so a failure doesn't loop-retry every tick
-    # (the firmware on the jailbroken Kindle drops the device on each MTP
-    # open, so retrying is actively harmful). Reset to False when the device
-    # leaves the bus.
-    files_fetched: bool = False
     # Last error from the device poller. None = the most recent tick succeeded
     # (whether or not a device was plugged in). /health reads this to
     # distinguish "MTP stack working but no device" from "MTP stack broken".

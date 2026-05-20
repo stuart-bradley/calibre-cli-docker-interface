@@ -39,7 +39,19 @@ def fake_helper(monkeypatch):
 
 
 def _enqueue(queue, payload, *, returncode: int = 0, stderr: str = "") -> None:
-    queue.append((returncode, json.dumps(payload), stderr))
+    # Match the runtime _print contract: each helper response is one line
+    # prefixed with mtp_helper._JSON_MARKER so the caller can extract it from
+    # surrounding Calibre teardown / setup chatter.
+    out = mtp_helper._JSON_MARKER + json.dumps(payload) + "\n"
+    queue.append((returncode, out, stderr))
+
+
+def _extract_payload(stdout: str) -> dict:
+    """Find the _JSON_MARKER line in helper stdout and parse it."""
+    for line in stdout.splitlines():
+        if line.startswith(mtp_helper._JSON_MARKER):
+            return json.loads(line[len(mtp_helper._JSON_MARKER) :])
+    raise AssertionError(f"no marker line in stdout: {stdout!r}")
 
 
 # --- detect -------------------------------------------------------------------
@@ -157,23 +169,30 @@ async def test_catastrophic_failure_raises(fake_helper):
 
 async def test_non_json_output_raises(fake_helper):
     queue, _log = fake_helper
-    queue.append((0, "not valid json", ""))
+    queue.append((0, "not valid json with no marker", ""))
 
-    with pytest.raises(mtp_helper.MTPHelperError, match="non-JSON"):
+    with pytest.raises(mtp_helper.MTPHelperError, match="did not emit JSON marker"):
         await mtp_helper.detect()
 
 
-async def test_invoke_tolerates_leading_warning_lines(fake_helper):
-    """calibre-debug can emit warnings to stdout before the helper's JSON line
-    (e.g. on first run as a non-root user, calibre prints "No write access to
-    /home/.../.config/calibre, using a temporary dir instead"). _invoke must
-    take the last non-empty line, not parse the full stdout."""
+async def test_invoke_tolerates_chatter_around_marker(fake_helper):
+    """calibre-debug emits diagnostics around the helper's tagged JSON line:
+    setup warnings before (e.g. "No write access to /home/.../.config/calibre,
+    using a temporary dir instead" on first run as non-root) and teardown
+    chatter after (e.g. "Device 0 (VID=1949 and PID=9981) is a Amazon Kindle
+    Scribe 32GB." from Calibre's device scanner at interpreter shutdown).
+    _invoke must extract the marker line and ignore both."""
     queue, _log = fake_helper
+    payload_line = mtp_helper._JSON_MARKER + json.dumps(
+        {"connected": True, "device": {"name": "Kindle", "vid": "1949", "pid": "9981"}}
+    )
     queue.append(
         (
             0,
             "No write access to /home/appuser/.config/calibre using a temporary dir instead\n"
-            '{"connected": true, "device": {"name": "Kindle", "vid": "1949", "pid": "9981"}}\n',
+            + payload_line
+            + "\n"
+            + "Device 0 (VID=1949 and PID=9981) is a Amazon Kindle Scribe 32GB.\n",
             "",
         )
     )
@@ -185,11 +204,11 @@ async def test_invoke_tolerates_leading_warning_lines(fake_helper):
     assert result.device.vid == "1949"
 
 
-async def test_invoke_empty_stdout_raises(fake_helper):
+async def test_invoke_no_marker_raises(fake_helper):
     queue, _log = fake_helper
     queue.append((0, "   \n  \n", ""))
 
-    with pytest.raises(mtp_helper.MTPHelperError, match="empty stdout"):
+    with pytest.raises(mtp_helper.MTPHelperError, match="did not emit JSON marker"):
         await mtp_helper.detect()
 
 
@@ -279,7 +298,7 @@ def test_cli_detect_no_device(monkeypatch, capsys):
     mtp_helper._cli_detect()
 
     captured = capsys.readouterr()
-    payload = json.loads(captured.out.strip())
+    payload = _extract_payload(captured.out)
     assert payload == {"connected": False, "device": None}
     assert len(instances) == 1
     assert instances[0].startup_called is True
@@ -323,7 +342,7 @@ def test_cli_detect_wraps_single_device_namedtuple(monkeypatch, capsys):
     mtp_helper._cli_detect()
 
     captured = capsys.readouterr()
-    payload = json.loads(captured.out.strip())
+    payload = _extract_payload(captured.out)
     assert payload["connected"] is True
     assert payload["device"]["vid"] == "1949"
     assert payload["device"]["pid"] == "9981"
@@ -346,7 +365,8 @@ async def test_non_overlap_lock_serialises_calls(monkeypatch):
             max_active = max(max_active, active)
             await asyncio.sleep(0.05)
             active -= 1
-            return b'{"connected": false, "device": null}', b""
+            payload = mtp_helper._JSON_MARKER + '{"connected": false, "device": null}\n'
+            return payload.encode(), b""
 
     async def fake_exec(*_cmd, **_kw):
         log.append("spawned")

@@ -66,17 +66,23 @@ async def _invoke(verb: str, *args: str, helper_path: Path | None = None) -> dic
     if proc.returncode != 0:
         err = (stderr.decode() or stdout.decode() or "").strip()
         raise MTPHelperError(f"calibre-debug exit {proc.returncode}: {err}")
-    # calibre-debug can prepend warning lines to stdout (e.g. "No write access
-    # to /home/.../.config/calibre, using a temporary dir instead" on first
-    # run as a non-root user). Our helper always _print()s a single JSON line
-    # last, so take the last non-empty line rather than parse the whole stdout.
-    lines = [line for line in stdout.decode().splitlines() if line.strip()]
-    if not lines:
-        raise MTPHelperError("helper returned empty stdout")
-    try:
-        return json.loads(lines[-1])
-    except json.JSONDecodeError as exc:
-        raise MTPHelperError(f"helper returned non-JSON: {lines[-1]!r}") from exc
+    # calibre-debug prints diagnostics around our JSON line: setup warnings
+    # before, teardown chatter ("Device 0 (VID=... PID=...) is a Amazon
+    # Kindle ...") after. Our _print tags its JSON with _JSON_MARKER so we
+    # can extract it unambiguously. If nothing matches, surface the full
+    # stdout (truncated) plus stderr so the caller sees what Calibre said.
+    text = stdout.decode()
+    for line in text.splitlines():
+        if line.startswith(_JSON_MARKER):
+            try:
+                return json.loads(line[len(_JSON_MARKER) :])
+            except json.JSONDecodeError as exc:
+                raise MTPHelperError(f"helper marker line was not valid JSON: {line!r}") from exc
+    err = stderr.decode().strip()
+    stdout_excerpt = text.strip()[-500:]
+    raise MTPHelperError(
+        f"helper did not emit JSON marker. stderr: {err!r}; stdout tail: {stdout_excerpt!r}"
+    )
 
 
 async def detect(*, helper_path: Path | None = None) -> DetectResult:
@@ -115,9 +121,15 @@ async def remove(dest_name: str, *, helper_path: Path | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
+_JSON_MARKER = "@@CWC_JSON@@"
+
+
 def _print(payload: dict) -> None:
-    sys.stdout.write(json.dumps(payload))
-    sys.stdout.write("\n")
+    # Tag the JSON line with a sentinel so the caller can pick it out of
+    # Calibre's chatter — Calibre's scanner prints lines like
+    # "Device 0 (VID=... and PID=...) is a ..." during teardown, after our
+    # output, and other warnings can show up before it.
+    sys.stdout.write(_JSON_MARKER + json.dumps(payload) + "\n")
     sys.stdout.flush()
 
 

@@ -129,17 +129,19 @@ def _parse_usb_id_filter() -> set[tuple[str, str]]:
 
 def _build_driver():
     """Construct an MTP_DEVICE with the GUI-side attributes the headless
-    constructor skips. Without these, detect_managed_devices() raises
-    AttributeError on `prefs` during its internal open() probe and swallows
-    the exception — returning None and making the UI report "no device" even
-    when libmtp sees the device. See upstream calibre GUI device-manager init.
+    constructor skips. Without ``report_progress`` and ``current_friendly_name``,
+    ``detect_managed_devices()`` raises ``AttributeError`` during its internal
+    ``open()`` probe and swallows it — returning ``None`` and making the UI
+    report "no device" even when libmtp sees the device.
+
+    Note: ``prefs`` is **not** set here. On calibre 9.8 it is a read-only
+    property auto-populated by ``startup()`` (assigning to it raises
+    "property 'prefs' has no setter"). Calling ``startup()`` is sufficient.
     """
     from calibre.devices.mtp.driver import MTP_DEVICE  # type: ignore
-    from calibre.utils.config import JSONConfig  # type: ignore
 
     drv = MTP_DEVICE(None)
     drv.startup()
-    drv.prefs = JSONConfig("mtp_devices")
     drv.report_progress = lambda *a, **k: None
     drv.current_friendly_name = None
     return drv

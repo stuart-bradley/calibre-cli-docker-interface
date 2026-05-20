@@ -162,7 +162,11 @@ async def test_non_json_output_raises(fake_helper):
 
 def _install_fake_calibre(monkeypatch):
     """Inject minimal fake calibre.* modules into sys.modules so _build_driver
-    can import them. Returns (MTP_DEVICE_class, instance_capture)."""
+    can import them. Returns (MTP_DEVICE_class, instance_capture).
+
+    The fake MTP_DEVICE mimics calibre 9.8's behaviour where startup()
+    auto-populates ``prefs`` — _build_driver must NOT assign to prefs (it's
+    a read-only property in real calibre)."""
     instances: list[object] = []
 
     class _FakeMTP:
@@ -173,38 +177,32 @@ def _install_fake_calibre(monkeypatch):
 
         def startup(self):
             self.startup_called = True
-
-    class _FakeJSONConfig:
-        def __init__(self, name):
-            self.name = name
+            # Mimic real calibre: startup() populates prefs.
+            self.prefs = {"populated_by": "startup"}
 
     driver_mod = types.ModuleType("calibre.devices.mtp.driver")
     driver_mod.MTP_DEVICE = _FakeMTP
-    config_mod = types.ModuleType("calibre.utils.config")
-    config_mod.JSONConfig = _FakeJSONConfig
 
     monkeypatch.setitem(sys.modules, "calibre", types.ModuleType("calibre"))
     monkeypatch.setitem(sys.modules, "calibre.devices", types.ModuleType("calibre.devices"))
     monkeypatch.setitem(sys.modules, "calibre.devices.mtp", types.ModuleType("calibre.devices.mtp"))
     monkeypatch.setitem(sys.modules, "calibre.devices.mtp.driver", driver_mod)
-    monkeypatch.setitem(sys.modules, "calibre.utils", types.ModuleType("calibre.utils"))
-    monkeypatch.setitem(sys.modules, "calibre.utils.config", config_mod)
     return _FakeMTP, instances
 
 
 def test_build_driver_calls_startup_and_sets_gui_attributes(monkeypatch):
     """NAS bug: detect_managed_devices() internally opens the device, which
-    raises AttributeError on `prefs` unless the GUI-side init has run.
-    Verify _build_driver sets all three attributes BEFORE returning."""
+    raises AttributeError on report_progress/current_friendly_name unless the
+    GUI-side init has run. ``prefs`` itself is populated by startup() and is
+    a read-only property — _build_driver must NOT assign to it."""
     _FakeMTP, instances = _install_fake_calibre(monkeypatch)
 
     drv = mtp_helper._build_driver()
 
     assert isinstance(drv, _FakeMTP)
     assert drv.startup_called is True
-    # The three attributes the upstream GUI device-manager init sets:
-    assert hasattr(drv, "prefs")
-    assert drv.prefs.name == "mtp_devices"  # JSONConfig("mtp_devices")
+    # prefs is populated by startup() — _build_driver must not overwrite it.
+    assert drv.prefs == {"populated_by": "startup"}
     assert callable(drv.report_progress)
     # report_progress should be a safe no-op
     drv.report_progress("anything", percent=50)

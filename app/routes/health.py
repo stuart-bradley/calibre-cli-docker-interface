@@ -33,10 +33,11 @@ def health(request: Request, settings: Settings = Depends(get_settings)):
         ok = False
     else:
         # libmtp loads, but that's not enough — the headless MTP_DEVICE init
-        # can still fail (see calibre.utils.config.JSONConfig dependency).
-        # Surface the most recent poller error so a broken init reports here
-        # instead of staying invisibly stuck at "no device". A None error
-        # (or pre-poll state) is treated as ok — libmtp loading is the floor.
+        # or detect_managed_devices() can still fail (e.g. missing GUI-side
+        # attributes on the driver). Surface the most recent poller error so a
+        # broken init reports here instead of staying invisibly stuck at "no
+        # device". A None error (or pre-poll state) is treated as ok — libmtp
+        # loading is the floor.
         state: DeviceState | None = getattr(request.app.state, "device_state", None)
         if state is not None and state.last_detect_error:
             checks["mtp"] = f"error: {state.last_detect_error}"

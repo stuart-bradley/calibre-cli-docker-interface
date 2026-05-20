@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Jobs — calibre-web-cli{% endblock %}
+{% block main %}
+<h2>Recent jobs</h2>
+<div class="jobs-list">
+  <table>
+    <thead>
+      <tr>
+        <th>When</th><th>Kind</th><th>State</th><th>Books</th><th>Summary</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+        {% include "_fragments/job_row.html" with context %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

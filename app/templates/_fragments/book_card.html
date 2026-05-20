@@ -1,0 +1,15 @@
+<div class="card">
+  <label class="select">
+    <input type="checkbox" name="book_id" value="{{ book.id }}" form="batch-form">
+    <a href="/book/{{ book.id }}">view</a>
+  </label>
+  <a href="/book/{{ book.id }}">
+    <img src="/cover/{{ book.id }}" alt="" loading="lazy">
+  </a>
+  <div class="title"><a href="/book/{{ book.id }}">{{ book.title }}</a></div>
+  <div class="author">{{ book.authors | join(", ") }}</div>
+  <div class="badges">
+    {% for fmt in book.formats %}<span class="badge">{{ fmt }}</span>{% endfor %}
+    {% if book.id in on_device_ids %}<span class="badge on-device">on device</span>{% endif %}
+  </div>
+</div>

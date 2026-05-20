@@ -1,0 +1,12 @@
+<span id="device-status"
+      class="device-status {% if device and device.connected %}connected{% endif %}"
+      hx-get="/device/status"
+      hx-trigger="every 5s"
+      hx-swap="outerHTML">
+  <span class="dot"></span>
+  {% if device and device.connected %}
+    Device connected: {{ device.device.name }}
+  {% else %}
+    No device
+  {% endif %}
+</span>

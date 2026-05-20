@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}{{ book.title }} — calibre-web-cli{% endblock %}
+{% block main %}
+<p><a href="/">← Back to library</a></p>
+<div class="detail-grid">
+  <div>
+    <img src="/cover/{{ book.id }}" alt="cover">
+  </div>
+  <div>
+    <h2>{{ book.title }}</h2>
+    <p class="author">{{ book.authors | join(", ") }}</p>
+    <ul class="metadata-list">
+      <li><span class="label">Tags</span> {{ book.tags | join(", ") or "—" }}</li>
+      <li><span class="label">Series</span> {{ book.series or "—" }}{% if book.series_index %} #{{ book.series_index }}{% endif %}</li>
+      <li><span class="label">Added</span> {{ book.timestamp.isoformat() }}</li>
+      <li><span class="label">Published</span> {{ book.pubdate.isoformat() if book.pubdate else "—" }}</li>
+      <li><span class="label">Formats</span> {{ book.formats | join(", ") }}</li>
+      {% for k, v in book.identifiers.items() %}
+        <li><span class="label">{{ k }}</span> {{ v }}</li>
+      {% endfor %}
+    </ul>
+    <div class="actions">
+      <form method="post" action="/batch/refresh?mode=fill_blanks">
+        <input type="hidden" name="book_id" value="{{ book.id }}">
+        <button>Refresh (fill blanks)</button>
+      </form>
+      <form method="post" action="/batch/refresh?mode=overwrite">
+        <input type="hidden" name="book_id" value="{{ book.id }}">
+        <button>Refresh (overwrite)</button>
+      </form>
+      {% for target in ["EPUB", "AZW3", "MOBI"] %}
+        {% if target not in book.formats %}
+        <form method="post" action="/batch/convert?target={{ target }}">
+          <input type="hidden" name="book_id" value="{{ book.id }}">
+          <button>Convert → {{ target }}</button>
+        </form>
+        {% endif %}
+      {% endfor %}
+      <form method="post" action="/batch/send">
+        <input type="hidden" name="book_id" value="{{ book.id }}">
+        <button>Send to device</button>
+      </form>
+      <form method="post" action="/batch/remove">
+        <input type="hidden" name="book_id" value="{{ book.id }}">
+        <button>Remove from device</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

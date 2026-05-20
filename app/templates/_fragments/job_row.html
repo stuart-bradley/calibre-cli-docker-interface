@@ -1,0 +1,19 @@
+<tr class="job-row {{ job.state }}"
+    id="job-{{ job.id }}"
+    {% if job.state in ("queued", "running") %}
+    hx-get="/jobs/{{ job.id }}/fragment"
+    hx-trigger="every 2s"
+    hx-swap="outerHTML"
+    {% endif %}>
+  <td>{{ job.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+  <td>{{ job.kind }}</td>
+  <td>{{ job.state }}</td>
+  <td>
+    {{ job.book_ids | length }}
+    {%- set done = job.progress | selectattr("state", "equalto", "done") | list | length %}
+    {%- set failed = job.progress | selectattr("state", "equalto", "failed") | list | length %}
+    {%- set skipped = job.progress | selectattr("state", "equalto", "skipped") | list | length %}
+    ({{ done }} done{% if failed %}, {{ failed }} failed{% endif %}{% if skipped %}, {{ skipped }} skipped{% endif %})
+  </td>
+  <td>{{ job.summary or "" }}</td>
+</tr>

@@ -1,0 +1,78 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1c1c1e;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --accent: #2563eb;
+  --accent-fg: #ffffff;
+  --card: #f9fafb;
+  --bad: #b91c1c;
+  --good: #15803d;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0b0d;
+    --fg: #e8e8ea;
+    --muted: #9aa0a6;
+    --border: #2a2a2e;
+    --accent: #60a5fa;
+    --accent-fg: #0b0b0d;
+    --card: #16161a;
+    --bad: #f87171;
+    --good: #4ade80;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header.app { display: flex; align-items: center; gap: 1rem;
+  padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border); }
+header.app h1 { margin: 0; font-size: 1rem; font-weight: 600; }
+header.app nav a { margin-right: 1rem; }
+main { padding: 1rem 1.25rem; max-width: 1400px; margin: 0 auto; }
+form.search { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+form.search input[type=text], form.search select {
+  padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--fg); }
+button, .btn {
+  padding: 0.4rem 0.8rem; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--card); color: var(--fg); cursor: pointer; font-size: 0.9rem; }
+button.primary, .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 1rem; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 0.5rem; display: flex; flex-direction: column; gap: 0.25rem; }
+.card img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover;
+  background: var(--border); border-radius: 4px; }
+.card .title { font-weight: 600; font-size: 0.9rem; }
+.card .author { color: var(--muted); font-size: 0.8rem; }
+.card label.select { display: flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; }
+.badges { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.badge { padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.7rem;
+  background: var(--border); color: var(--fg); }
+.badge.on-device { background: var(--good); color: var(--accent-fg); }
+.pagination { display: flex; gap: 0.5rem; margin: 1rem 0; align-items: center; }
+.pagination .current { font-weight: 600; }
+.batch-bar { position: sticky; top: 0; background: var(--bg);
+  border-bottom: 1px solid var(--border); padding: 0.5rem 0;
+  display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+.device-status { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; }
+.device-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.device-status.connected .dot { background: var(--good); }
+.jobs-list table { width: 100%; border-collapse: collapse; }
+.jobs-list th, .jobs-list td { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; }
+.job-row.failed { color: var(--bad); }
+.job-row.done { color: var(--good); }
+.detail-grid { display: grid; grid-template-columns: 240px 1fr; gap: 1.5rem; }
+.detail-grid img { width: 240px; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 6px; background: var(--border); }
+.metadata-list { list-style: none; padding: 0; margin: 0; }
+.metadata-list li { padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
+.metadata-list .label { color: var(--muted); display: inline-block; min-width: 100px; }
+.actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+.summary { padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px; background: var(--card);
+  margin-top: 1rem; white-space: pre-wrap; }
+.upload-zone { padding: 2rem; border: 2px dashed var(--border); border-radius: 8px;
+  text-align: center; color: var(--muted); }

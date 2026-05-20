@@ -6,7 +6,6 @@ from app.config import Settings
 from app.services import device, mtp_helper
 from app.state import DeviceState
 
-
 # ---------------------------------------------------------------------------
 # _kindle_on_bus — sysfs USB presence check
 # ---------------------------------------------------------------------------

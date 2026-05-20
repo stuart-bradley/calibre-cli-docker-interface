@@ -1,0 +1,32 @@
+services:
+  calibre-web-cli:
+    image: ghcr.io/stuart-bradley/calibre-cli-docker-interface:latest
+    # Local build alternative:
+    # build: .
+    container_name: calibre-web-cli
+    restart: unless-stopped
+    ports:
+      - "${CALIBRE_WEB_CLI_PORT:-8084}:8084"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - CALIBRE_WEB_CLI_PORT=${CALIBRE_WEB_CLI_PORT:-8084}
+      - CALIBRE_WEB_CLI_PASSWORD=${CALIBRE_WEB_CLI_PASSWORD:-}
+      - CALIBRE_WEB_CLI_METADATA_SOURCES=${CALIBRE_WEB_CLI_METADATA_SOURCES:-Amazon,Google}
+      - CALIBRE_WEB_CLI_DEVICE_FORMAT_ORDER=${CALIBRE_WEB_CLI_DEVICE_FORMAT_ORDER:-EPUB,AZW3,MOBI,PDF}
+      - CALIBRE_WEB_CLI_PAGE_SIZE=${CALIBRE_WEB_CLI_PAGE_SIZE:-48}
+      - CALIBRE_WEB_CLI_MTP_USB_IDS=${CALIBRE_WEB_CLI_MTP_USB_IDS:-}
+      - CALIBRE_WEB_CLI_SNAPSHOT_RETENTION_DAYS=${CALIBRE_WEB_CLI_SNAPSHOT_RETENTION_DAYS:-14}
+    volumes:
+      - "${LIBRARY_PATH}:/books"
+      - "${DATA_PATH:-./data}:/data"
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - "c 189:* rwm"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8084/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

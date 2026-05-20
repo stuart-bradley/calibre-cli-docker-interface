@@ -154,6 +154,36 @@ async def test_non_json_output_raises(fake_helper):
         await mtp_helper.detect()
 
 
+async def test_invoke_tolerates_leading_warning_lines(fake_helper):
+    """calibre-debug can emit warnings to stdout before the helper's JSON line
+    (e.g. on first run as a non-root user, calibre prints "No write access to
+    /home/.../.config/calibre, using a temporary dir instead"). _invoke must
+    take the last non-empty line, not parse the full stdout."""
+    queue, _log = fake_helper
+    queue.append(
+        (
+            0,
+            "No write access to /home/appuser/.config/calibre using a temporary dir instead\n"
+            '{"connected": true, "device": {"name": "Kindle", "vid": "1949", "pid": "9981"}}\n',
+            "",
+        )
+    )
+
+    result = await mtp_helper.detect()
+
+    assert result.connected is True
+    assert result.device is not None
+    assert result.device.vid == "1949"
+
+
+async def test_invoke_empty_stdout_raises(fake_helper):
+    queue, _log = fake_helper
+    queue.append((0, "   \n  \n", ""))
+
+    with pytest.raises(mtp_helper.MTPHelperError, match="empty stdout"):
+        await mtp_helper.detect()
+
+
 # --- lock guard ---------------------------------------------------------------
 
 
@@ -209,21 +239,7 @@ def test_build_driver_calls_startup_and_sets_gui_attributes(monkeypatch):
     assert drv.current_friendly_name is None
 
 
-def test_cli_detect_uses_build_driver(monkeypatch, capsys):
-    """Smoke-test: _cli_detect goes through _build_driver, so a fake driver
-    that records detect_managed_devices is called and returns no devices."""
-    _FakeMTP, instances = _install_fake_calibre(monkeypatch)
-
-    # Extend the fake to satisfy _cli_detect's needs.
-    detect_calls: list[object] = []
-
-    def detect_managed_devices(self, scanner_devices):
-        detect_calls.append(scanner_devices)
-        return []
-
-    _FakeMTP.detect_managed_devices = detect_managed_devices
-
-    # Provide a minimal scanner module.
+def _install_fake_scanner(monkeypatch):
     scanner_mod = types.ModuleType("calibre.devices.scanner")
 
     class _FakeScanner:
@@ -236,16 +252,67 @@ def test_cli_detect_uses_build_driver(monkeypatch, capsys):
     scanner_mod.DeviceScanner = _FakeScanner
     monkeypatch.setitem(sys.modules, "calibre.devices.scanner", scanner_mod)
 
+
+def test_cli_detect_no_device(monkeypatch, capsys):
+    """Real calibre returns None when no MTP device is attached. _cli_detect
+    must surface that as ``connected: false``."""
+    _FakeMTP, instances = _install_fake_calibre(monkeypatch)
+
+    detect_calls: list[object] = []
+
+    def detect_managed_devices(self, scanner_devices):
+        detect_calls.append(scanner_devices)
+        return None  # real calibre: no device found → None
+
+    _FakeMTP.detect_managed_devices = detect_managed_devices
+    _install_fake_scanner(monkeypatch)
+
     mtp_helper._cli_detect()
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out.strip())
     assert payload == {"connected": False, "device": None}
-    # The fake driver instance was created with .startup() and .prefs set,
-    # then detect_managed_devices() was called on it.
     assert len(instances) == 1
     assert instances[0].startup_called is True
     assert detect_calls == [[]]
+
+
+def test_cli_detect_wraps_single_device_namedtuple(monkeypatch, capsys):
+    """Regression: real calibre returns a single MTPDevice namedtuple (NOT a
+    list of devices) when a device is found. _scan_and_detect must wrap it
+    into a one-element list — otherwise `for dev in connected_devs` iterates
+    over the tuple's *field values* (busnum, devnum, vendor_id, ...) instead
+    of devices, and getattr(int, 'vendor_id', 0) returns 0 for every item,
+    silently misreporting as `connected: false`."""
+    from collections import namedtuple
+
+    _FakeMTP, _instances = _install_fake_calibre(monkeypatch)
+
+    # Mimic calibre's MTPDevice namedtuple shape (a subclass of tuple, so
+    # iterable as field values — that's the trap).
+    MTPDevice = namedtuple(
+        "MTPDevice",
+        ["busnum", "devnum", "vendor_id", "product_id", "bcd", "serial", "manufacturer", "product"],
+    )
+    kindle = MTPDevice(
+        busnum=1, devnum=13, vendor_id=0x1949, product_id=0x9981, bcd=0x0223,
+        serial="GN433W0743220177", manufacturer="Amazon", product="Kindle Paperwhite Signature Edition",
+    )
+
+    def detect_managed_devices(self, scanner_devices):
+        return kindle  # single device, NOT a list
+
+    _FakeMTP.detect_managed_devices = detect_managed_devices
+    _install_fake_scanner(monkeypatch)
+
+    mtp_helper._cli_detect()
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out.strip())
+    assert payload["connected"] is True
+    assert payload["device"]["vid"] == "1949"
+    assert payload["device"]["pid"] == "9981"
+    assert "Kindle" in payload["device"]["name"]
 
 
 async def test_non_overlap_lock_serialises_calls(monkeypatch):

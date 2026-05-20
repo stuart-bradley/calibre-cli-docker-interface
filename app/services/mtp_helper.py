@@ -64,11 +64,17 @@ async def _invoke(verb: str, *args: str, helper_path: Path | None = None) -> dic
     if proc.returncode != 0:
         err = (stderr.decode() or stdout.decode() or "").strip()
         raise MTPHelperError(f"calibre-debug exit {proc.returncode}: {err}")
-    out = stdout.decode().strip()
+    # calibre-debug can prepend warning lines to stdout (e.g. "No write access
+    # to /home/.../.config/calibre, using a temporary dir instead" on first
+    # run as a non-root user). Our helper always _print()s a single JSON line
+    # last, so take the last non-empty line rather than parse the whole stdout.
+    lines = [line for line in stdout.decode().splitlines() if line.strip()]
+    if not lines:
+        raise MTPHelperError("helper returned empty stdout")
     try:
-        return json.loads(out)
+        return json.loads(lines[-1])
     except json.JSONDecodeError as exc:
-        raise MTPHelperError(f"helper returned non-JSON: {out!r}") from exc
+        raise MTPHelperError(f"helper returned non-JSON: {lines[-1]!r}") from exc
 
 
 async def detect(*, helper_path: Path | None = None) -> DetectResult:
@@ -148,11 +154,23 @@ def _build_driver():
 
 
 def _scan_and_detect(driver):
+    """Return the list of MTP devices currently attached.
+
+    Calibre's ``MTP_DEVICE.detect_managed_devices()`` returns a **single**
+    ``MTPDevice`` (a namedtuple) or ``None``, not a list of devices — that's
+    how the ``MANAGES_DEVICE_PRESENCE`` plugin contract works. The previous
+    ``... or []`` collapsed the None case correctly but left the single
+    namedtuple naked: iterating it then yielded the tuple's *field values*
+    (busnum, devnum, vendor_id, ...) instead of devices, and the caller's
+    ``getattr(dev, "vendor_id", 0)`` returned 0 for every integer/string item
+    so the device was silently rejected. Wrap into a single-element list.
+    """
     from calibre.devices.scanner import DeviceScanner  # type: ignore
 
     scanner = DeviceScanner()
     scanner.scan()
-    return driver.detect_managed_devices(scanner.devices) or []
+    found = driver.detect_managed_devices(scanner.devices)
+    return [found] if found is not None else []
 
 
 def _cli_detect() -> None:

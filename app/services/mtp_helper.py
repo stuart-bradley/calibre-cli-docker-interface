@@ -212,6 +212,23 @@ def _cli_list() -> None:
 
 
 def _cli_send(local: str, dest: str) -> None:
+    """Upload ``local`` to the device, naming it ``dest`` in the main ebooks
+    folder.
+
+    Uses Calibre's high-level ``MTP_DEVICE.upload_books`` rather than the
+    lower-level ``put_file``: the previous implementation called
+    ``driver.put_file(driver.root("documents"), ...)`` but ``MTP_DEVICE`` on
+    Calibre 9.8 has no ``root`` attribute — every send failed with
+    ``AttributeError: 'MTP_DEVICE' object has no attribute 'root'`` (the
+    Calibre GUI uses ``upload_books`` exclusively; the storage root /
+    destination folder is resolved internally from the device's filesystem
+    cache and metadata).
+
+    ``end_session=False`` keeps the MTP session open after the upload
+    finishes. The jailbroken Kindle MTP-only firmware appears to drop the
+    device off the USB bus on every explicit ``CloseSession``; deferring the
+    close to subprocess teardown is the leading hypothesis for avoiding that.
+    """
     driver = _build_driver()
     devs = _scan_and_detect(driver)
     if not devs:
@@ -219,7 +236,7 @@ def _cli_send(local: str, dest: str) -> None:
         return
     driver.open(devs[0], "library")
     with open(local, "rb") as fh:
-        driver.put_file(driver.root("documents"), dest, fh, os.path.getsize(local))
+        driver.upload_books([fh], [dest], end_session=False)
     _print({"ok": True, "dest": f"documents/{dest}"})
 
 

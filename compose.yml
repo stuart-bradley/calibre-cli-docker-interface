@@ -19,7 +19,11 @@ services:
       - CALIBRE_WEB_CLI_MTP_USB_IDS=${CALIBRE_WEB_CLI_MTP_USB_IDS:-}
       - CALIBRE_WEB_CLI_SNAPSHOT_RETENTION_DAYS=${CALIBRE_WEB_CLI_SNAPSHOT_RETENTION_DAYS:-14}
     volumes:
-      - "${LIBRARY_PATH}:/books"
+      # The container always reads the library from /books (app.config default).
+      # Setting LIBRARY_HOST_PATH (not LIBRARY_PATH) keeps the host path out of
+      # the container's environment — important if you use `env_file:` from a
+      # shared .env where LIBRARY_PATH might leak across services.
+      - "${LIBRARY_HOST_PATH}:/books"
       - "${DATA_PATH:-./data}:/data"
     devices:
       - /dev/bus/usb:/dev/bus/usb

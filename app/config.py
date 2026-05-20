@@ -17,7 +17,10 @@ def _split_csv(value: str | list[str] | None) -> list[str]:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
-    library_path: Path = Field(validation_alias="LIBRARY_PATH")
+    # Inside the container the library is bind-mounted at /books; the host path
+    # is configured via LIBRARY_HOST_PATH on the compose side. Overriding
+    # LIBRARY_PATH is supported for local non-container development.
+    library_path: Path = Field(default=Path("/books"), validation_alias="LIBRARY_PATH")
     data_path: Path = Field(default=Path("./data"), validation_alias="DATA_PATH")
     puid: int = Field(default=1000, validation_alias="PUID")
     pgid: int = Field(default=1000, validation_alias="PGID")

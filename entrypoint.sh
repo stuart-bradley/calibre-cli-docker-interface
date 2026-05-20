@@ -5,7 +5,19 @@ PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 PORT="${CALIBRE_WEB_CLI_PORT:-8084}"
 
-# Create group/user if not already present (idempotent across restarts).
+# When invoked as non-root (e.g. `docker run --user 1026:100 …` for ad-hoc
+# maintenance, or someone using compose's `user:` directive), skip the
+# user/group setup and the chown — they would fail without CAP_CHOWN /
+# CAP_SETUID. The caller has already chosen the identity; just exec.
+if [ "$(id -u)" -ne 0 ]; then
+  exec uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port "$PORT" \
+    --workers 1 \
+    --no-access-log
+fi
+
+# Root path: provision user/group matching PUID/PGID, then drop privileges.
 if ! getent group "$PGID" >/dev/null; then
   groupadd -g "$PGID" appgrp
 fi

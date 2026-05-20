@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from app.config import Settings, get_settings
 
@@ -45,9 +44,14 @@ def test_defaults_with_only_required_set(_clear_env, monkeypatch):
     assert s.snapshot_retention_days == 14
 
 
-def test_required_library_path_missing_raises(_clear_env):
-    with pytest.raises(ValidationError):
-        Settings()
+def test_library_path_defaults_to_container_mount(_clear_env):
+    """When LIBRARY_PATH is unset, fall back to /books (the in-container mount).
+
+    The host-side bind source is configured via LIBRARY_HOST_PATH at the
+    compose layer. Defaulting here means env_file users can't accidentally
+    leak the host path into the container.
+    """
+    assert Settings().library_path == Path("/books")
 
 
 def test_empty_password_becomes_none(_clear_env, monkeypatch):

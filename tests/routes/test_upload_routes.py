@@ -49,20 +49,25 @@ def test_upload_reports_duplicates_in_summary(client, monkeypatch):
         if call_count["n"] == 1:
             return subprocess.CompletedProcess(argv, 0, "Added book ids: 42\n", "")
         return subprocess.CompletedProcess(
-            argv, 0,
+            argv,
+            0,
             f"{calibre_cli.DUPLICATE_MARKER}\n/tmp/dup.epub\n",
             "",
         )
 
     monkeypatch.setattr(calibre_cli, "_run", fake_run)
 
-    client.post("/upload", files=[
-        ("files", ("a.epub", b"a", "application/epub+zip")),
-        ("files", ("dup.epub", b"dup", "application/epub+zip")),
-    ])
+    client.post(
+        "/upload",
+        files=[
+            ("files", ("a.epub", b"a", "application/epub+zip")),
+            ("files", ("dup.epub", b"dup", "application/epub+zip")),
+        ],
+    )
 
     # Poll the worker until the upload job finishes.
     import time
+
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
         jobs = [j for j in client.app.state.worker.list_jobs(100) if j.kind == "upload"]

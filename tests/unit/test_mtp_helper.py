@@ -15,7 +15,7 @@ from app.services import mtp_helper
 def fake_helper(monkeypatch):
     """Stub asyncio.create_subprocess_exec with a queued list of responses."""
 
-    queue: list[tuple[int, str, str]] = []   # (returncode, stdout, stderr)
+    queue: list[tuple[int, str, str]] = []  # (returncode, stdout, stderr)
     call_log: list[list[str]] = []
 
     class _FakeProc:
@@ -47,10 +47,13 @@ def _enqueue(queue, payload, *, returncode: int = 0, stderr: str = "") -> None:
 
 async def test_detect_connected(fake_helper):
     queue, log = fake_helper
-    _enqueue(queue, {
-        "connected": True,
-        "device": {"name": "Kindle PW3", "vid": "1949", "pid": "9981"},
-    })
+    _enqueue(
+        queue,
+        {
+            "connected": True,
+            "device": {"name": "Kindle PW3", "vid": "1949", "pid": "9981"},
+        },
+    )
 
     result = await mtp_helper.detect()
 
@@ -75,10 +78,16 @@ async def test_detect_disconnected(fake_helper):
 
 async def test_list_files_ok(fake_helper):
     queue, _log = fake_helper
-    _enqueue(queue, {"ok": True, "files": [
-        {"path": "documents/A.epub", "size": 111},
-        {"path": "documents/B.epub", "size": 222},
-    ]})
+    _enqueue(
+        queue,
+        {
+            "ok": True,
+            "files": [
+                {"path": "documents/A.epub", "size": 111},
+                {"path": "documents/B.epub", "size": 222},
+            ],
+        },
+    )
 
     files = await mtp_helper.list_files()
 
@@ -295,8 +304,13 @@ def test_cli_detect_wraps_single_device_namedtuple(monkeypatch, capsys):
         ["busnum", "devnum", "vendor_id", "product_id", "bcd", "serial", "manufacturer", "product"],
     )
     kindle = MTPDevice(
-        busnum=1, devnum=13, vendor_id=0x1949, product_id=0x9981, bcd=0x0223,
-        serial="GN433W0743220177", manufacturer="Amazon",
+        busnum=1,
+        devnum=13,
+        vendor_id=0x1949,
+        product_id=0x9981,
+        bcd=0x0223,
+        serial="GN433W0743220177",
+        manufacturer="Amazon",
         product="Kindle Paperwhite Signature Edition",
     )
 

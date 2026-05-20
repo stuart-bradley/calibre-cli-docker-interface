@@ -18,7 +18,9 @@ COOKIE_MAX_AGE = 365 * 24 * 3600
 
 
 def _resolve_per_page(
-    request: Request, query_value: int | None, default: int,
+    request: Request,
+    query_value: int | None,
+    default: int,
 ) -> tuple[int, bool]:
     if query_value is not None:
         return max(1, query_value), True
@@ -51,8 +53,14 @@ def list_view(
 
     books, total = db.list_books(
         settings.library_path,
-        q=q, author=author, tag=tag, series=series, format=format,
-        sort=sort, page=page, per_page=resolved_per_page,
+        q=q,
+        author=author,
+        tag=tag,
+        series=series,
+        format=format,
+        sort=sort,
+        page=page,
+        per_page=resolved_per_page,
     )
     total_pages = max(1, (total + resolved_per_page - 1) // resolved_per_page)
     all_tags = _all_tags(settings.library_path)
@@ -62,9 +70,14 @@ def list_view(
 
     def query_str(**overrides):
         params = {
-            "q": q or "", "author": author or "", "tag": tag or "",
-            "series": series or "", "format": format or "", "sort": sort,
-            "page": page, "per_page": resolved_per_page,
+            "q": q or "",
+            "author": author or "",
+            "tag": tag or "",
+            "series": series or "",
+            "format": format or "",
+            "sort": sort,
+            "page": page,
+            "per_page": resolved_per_page,
         }
         params.update(overrides)
         cleaned = {k: v for k, v in params.items() if v not in (None, "")}
@@ -79,7 +92,9 @@ def list_view(
             "total_pages": total_pages,
             "page": page,
             "per_page": resolved_per_page,
-            "q": q, "author": author, "tag": tag,
+            "q": q,
+            "author": author,
+            "tag": tag,
             "sort": sort,
             "all_tags": all_tags,
             "device": device_state.detect,
@@ -89,8 +104,11 @@ def list_view(
     )
     if set_cookie:
         html.set_cookie(
-            PER_PAGE_COOKIE, str(resolved_per_page),
-            max_age=COOKIE_MAX_AGE, samesite="lax", path="/",
+            PER_PAGE_COOKIE,
+            str(resolved_per_page),
+            max_age=COOKIE_MAX_AGE,
+            samesite="lax",
+            path="/",
         )
     return html
 

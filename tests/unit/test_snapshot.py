@@ -56,8 +56,8 @@ def test_prunes_old_snapshots_when_writing_new(library, data_dir):
     tomorrow = today + timedelta(days=1)
 
     keep = _make_snapshot(data_dir, today)
-    keep_edge = _make_snapshot(data_dir, today - timedelta(days=12))   # within 14 of tomorrow
-    drop_old = _make_snapshot(data_dir, today - timedelta(days=14))    # outside 14 of tomorrow
+    keep_edge = _make_snapshot(data_dir, today - timedelta(days=12))  # within 14 of tomorrow
+    drop_old = _make_snapshot(data_dir, today - timedelta(days=14))  # outside 14 of tomorrow
     drop_older = _make_snapshot(data_dir, today - timedelta(days=30))
 
     snapshot.snapshot_if_needed(library, data_dir, 14, today=tomorrow)

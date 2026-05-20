@@ -54,6 +54,7 @@ def app(settings: Settings, monkeypatch):
     monkeypatch.setattr(mtp_helper, "remove", fake_remove)
 
     from app.main import create_app
+
     return create_app(settings)
 
 

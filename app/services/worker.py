@@ -96,7 +96,8 @@ class Worker:
         if len(self._jobs) > MAX_JOB_HISTORY:
             log.warning(
                 "job history at %d (cap %d) — all active, eviction deferred",
-                len(self._jobs), MAX_JOB_HISTORY,
+                len(self._jobs),
+                MAX_JOB_HISTORY,
             )
 
     def get_job(self, job_id: str) -> Job | None:

@@ -115,21 +115,19 @@ _OPF_FETCHED = """<?xml version="1.0" encoding="UTF-8"?>
 def test_refresh_fill_blanks_skips_present_fields(stub_run, run_calls):
     stub_run(
         _cp(stdout=_OPF_WITH_TITLE_AND_AUTHOR),  # show_metadata
-        _cp(stdout=_OPF_FETCHED),                # fetch-ebook-metadata
-        _cp(returncode=0),                        # set_metadata
+        _cp(stdout=_OPF_FETCHED),  # fetch-ebook-metadata
+        _cp(returncode=0),  # set_metadata
     )
 
-    result = calibre_cli.refresh_metadata(
-        LIB, 7, mode="fill_blanks", sources=["Amazon", "Google"]
-    )
+    result = calibre_cli.refresh_metadata(LIB, 7, mode="fill_blanks", sources=["Amazon", "Google"])
 
     assert result.state == "fetched"
     set_metadata_argv = run_calls[-1]
     fields = _argv_after(set_metadata_argv, "--field")
     field_names = [f.split(":", 1)[0] for f in fields]
-    assert "title" not in field_names      # present in existing → skip
-    assert "authors" not in field_names    # present in existing → skip
-    assert "comments" in field_names       # absent in existing → apply
+    assert "title" not in field_names  # present in existing → skip
+    assert "authors" not in field_names  # present in existing → skip
+    assert "comments" in field_names  # absent in existing → apply
     assert "series" in field_names
     assert "publisher" in field_names
     assert "tags" in field_names
@@ -142,9 +140,7 @@ def test_refresh_overwrite_passes_all_fields(stub_run, run_calls):
         _cp(returncode=0),
     )
 
-    result = calibre_cli.refresh_metadata(
-        LIB, 7, mode="overwrite", sources=["Amazon", "Google"]
-    )
+    result = calibre_cli.refresh_metadata(LIB, 7, mode="overwrite", sources=["Amazon", "Google"])
 
     assert result.state == "fetched"
     set_metadata_argv = run_calls[-1]
@@ -180,6 +176,7 @@ def _refresh_with_cover_stub(monkeypatch, run_calls, *, existing_cover: Path | N
     monkeypatch.setattr(calibre_cli, "_run", fake_run)
 
     from app.services import db
+
     monkeypatch.setattr(db, "get_cover_path", lambda lp, bid: existing_cover)
 
 
@@ -187,7 +184,11 @@ def test_refresh_fetch_covers_true_passes_cover_flag(monkeypatch, run_calls, tmp
     _refresh_with_cover_stub(monkeypatch, run_calls, existing_cover=None)
 
     calibre_cli.refresh_metadata(
-        LIB, 7, mode="fill_blanks", sources=["Amazon"], fetch_covers=True,
+        LIB,
+        7,
+        mode="fill_blanks",
+        sources=["Amazon"],
+        fetch_covers=True,
     )
 
     fetch_argv = next(a for a in run_calls if a[0] == "fetch-ebook-metadata")
@@ -198,7 +199,11 @@ def test_refresh_fetch_covers_false_omits_cover_flag(monkeypatch, run_calls, tmp
     _refresh_with_cover_stub(monkeypatch, run_calls, existing_cover=None)
 
     calibre_cli.refresh_metadata(
-        LIB, 7, mode="fill_blanks", sources=["Amazon"], fetch_covers=False,
+        LIB,
+        7,
+        mode="fill_blanks",
+        sources=["Amazon"],
+        fetch_covers=False,
     )
 
     fetch_argv = next(a for a in run_calls if a[0] == "fetch-ebook-metadata")
@@ -212,7 +217,11 @@ def test_refresh_fill_blanks_skips_set_cover_when_cover_exists(monkeypatch, run_
     _refresh_with_cover_stub(monkeypatch, run_calls, existing_cover=fake_cover)
 
     calibre_cli.refresh_metadata(
-        LIB, 7, mode="fill_blanks", sources=["Amazon"], fetch_covers=True,
+        LIB,
+        7,
+        mode="fill_blanks",
+        sources=["Amazon"],
+        fetch_covers=True,
     )
 
     assert not any(a[:2] == ["calibredb", "set_cover"] for a in run_calls)
@@ -222,7 +231,11 @@ def test_refresh_fill_blanks_applies_cover_when_missing(monkeypatch, run_calls):
     _refresh_with_cover_stub(monkeypatch, run_calls, existing_cover=None)
 
     result = calibre_cli.refresh_metadata(
-        LIB, 7, mode="fill_blanks", sources=["Amazon"], fetch_covers=True,
+        LIB,
+        7,
+        mode="fill_blanks",
+        sources=["Amazon"],
+        fetch_covers=True,
     )
 
     assert any(a[:2] == ["calibredb", "set_cover"] for a in run_calls)
@@ -235,7 +248,11 @@ def test_refresh_overwrite_always_applies_cover(monkeypatch, run_calls, tmp_path
     _refresh_with_cover_stub(monkeypatch, run_calls, existing_cover=fake_cover)
 
     result = calibre_cli.refresh_metadata(
-        LIB, 7, mode="overwrite", sources=["Amazon"], fetch_covers=True,
+        LIB,
+        7,
+        mode="overwrite",
+        sources=["Amazon"],
+        fetch_covers=True,
     )
 
     assert any(a[:2] == ["calibredb", "set_cover"] for a in run_calls)
@@ -248,9 +265,7 @@ def test_refresh_no_match(stub_run):
         _cp(stdout="", stderr="No results found", returncode=1),
     )
 
-    result = calibre_cli.refresh_metadata(
-        LIB, 7, mode="fill_blanks", sources=["Amazon"]
-    )
+    result = calibre_cli.refresh_metadata(LIB, 7, mode="fill_blanks", sources=["Amazon"])
 
     assert result.state == "no_match"
 
@@ -304,7 +319,8 @@ def test_convert_no_source_format():
 def test_run_logs_argv(caplog, monkeypatch):
     # Replace subprocess.run so the real one isn't invoked.
     monkeypatch.setattr(
-        calibre_cli.subprocess, "run",
+        calibre_cli.subprocess,
+        "run",
         lambda *a, **kw: subprocess.CompletedProcess(a[0], 0, "", ""),
     )
 

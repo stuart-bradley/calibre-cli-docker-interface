@@ -58,7 +58,9 @@ async def _invoke(verb: str, *args: str, helper_path: Path | None = None) -> dic
     helper = str(helper_path or _DEFAULT_HELPER_PATH)
     cmd = ["calibre-debug", "-e", helper, verb, *args]
     proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:

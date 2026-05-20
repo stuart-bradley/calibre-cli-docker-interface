@@ -66,7 +66,7 @@ def test_library_body_attribute_when_device_connected(client):
 
 def test_library_body_attribute_absent_when_disconnected(client):
     resp = client.get("/")
-    assert 'data-device-connected' not in resp.text
+    assert "data-device-connected" not in resp.text
 
 
 def test_on_device_badge_appears_for_matching_filename(client):

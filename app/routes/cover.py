@@ -16,9 +16,9 @@ def _placeholder_svg(book_id: int, title: str) -> bytes:
         f'  <rect width="180" height="270" fill="#d1d5db"/>'
         f'  <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle"'
         f'        font-family="system-ui, sans-serif" font-size="12" fill="#4b5563">'
-        f'    {safe[:80]}'
-        f'  </text>'
-        f'</svg>'
+        f"    {safe[:80]}"
+        f"  </text>"
+        f"</svg>"
     ).encode()
 
 

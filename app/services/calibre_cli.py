@@ -51,11 +51,15 @@ def _run(argv: list[str], *, input: str | None = None) -> subprocess.CompletedPr
 
 
 def add_book(library_path: Path, file_path: Path) -> AddResult:
-    proc = _run([
-        "calibredb", "add",
-        "--library-path", str(library_path),
-        str(file_path),
-    ])
+    proc = _run(
+        [
+            "calibredb",
+            "add",
+            "--library-path",
+            str(library_path),
+            str(file_path),
+        ]
+    )
 
     out = proc.stdout or ""
     err = proc.stderr or ""
@@ -68,39 +72,54 @@ def add_book(library_path: Path, file_path: Path) -> AddResult:
     if match:
         first_id = int(match.group(1).split(",")[0].strip())
         return AddResult(
-            added=True, duplicate=False, book_id=first_id,
+            added=True,
+            duplicate=False,
+            book_id=first_id,
             message=f"Added book id {first_id}",
         )
 
     msg = combined.strip()
     if proc.returncode != 0:
         return AddResult(
-            added=False, duplicate=False, book_id=None,
+            added=False,
+            duplicate=False,
+            book_id=None,
             message=msg or f"calibredb add exit {proc.returncode}",
         )
 
     return AddResult(
-        added=False, duplicate=False, book_id=None,
+        added=False,
+        duplicate=False,
+        book_id=None,
         message=msg or "no book id returned",
     )
 
 
 def add_format(library_path: Path, book_id: int, file_path: Path) -> bool:
-    proc = _run([
-        "calibredb", "add_format",
-        "--library-path", str(library_path),
-        str(book_id), str(file_path),
-    ])
+    proc = _run(
+        [
+            "calibredb",
+            "add_format",
+            "--library-path",
+            str(library_path),
+            str(book_id),
+            str(file_path),
+        ]
+    )
     return proc.returncode == 0
 
 
 def show_metadata_opf(library_path: Path, book_id: int) -> str:
-    proc = _run([
-        "calibredb", "show_metadata",
-        "--library-path", str(library_path),
-        "--as-opf",
-        str(book_id),
-    ])
+    proc = _run(
+        [
+            "calibredb",
+            "show_metadata",
+            "--library-path",
+            str(library_path),
+            "--as-opf",
+            str(book_id),
+        ]
+    )
     return proc.stdout or ""
 
 
@@ -163,11 +182,16 @@ def _fetch_metadata_opf(
 
 
 def set_cover(library_path: Path, book_id: int, cover_path: Path) -> bool:
-    proc = _run([
-        "calibredb", "set_cover",
-        "--library-path", str(library_path),
-        str(book_id), str(cover_path),
-    ])
+    proc = _run(
+        [
+            "calibredb",
+            "set_cover",
+            "--library-path",
+            str(library_path),
+            str(book_id),
+            str(cover_path),
+        ]
+    )
     return proc.returncode == 0
 
 
@@ -190,8 +214,10 @@ def _title_and_authors_from_opf(opf_xml: str) -> tuple[str | None, list[str]]:
 
 def _set_metadata_argv(library_path: Path, book_id: int, fields: dict[str, str]) -> list[str]:
     argv = [
-        "calibredb", "set_metadata",
-        "--library-path", str(library_path),
+        "calibredb",
+        "set_metadata",
+        "--library-path",
+        str(library_path),
         str(book_id),
     ]
     for name, value in fields.items():
@@ -212,7 +238,10 @@ def refresh_metadata(
     with tempfile.TemporaryDirectory() as tmp:
         cover_dest = Path(tmp) / f"{book_id}-cover.jpg" if fetch_covers else None
         fetched_opf, fetch_message = _fetch_metadata_opf(
-            book_id, sources, existing_opf, cover_dest=cover_dest,
+            book_id,
+            sources,
+            existing_opf,
+            cover_dest=cover_dest,
         )
         if fetched_opf is None:
             lower = fetch_message.lower()
@@ -259,16 +288,16 @@ def refresh_metadata(
             # In fill_blanks: only set cover if the book has none.
             # In overwrite: always replace.
             from app.services import db as _db
-            should_apply = (
-                mode == "overwrite"
-                or _db.get_cover_path(library_path, book_id) is None
-            )
+
+            should_apply = mode == "overwrite" or _db.get_cover_path(library_path, book_id) is None
             if should_apply:
                 cover_applied = set_cover(library_path, book_id, cover_dest)
 
         if not to_apply and not cover_applied:
             return RefreshResult(
-                book_id=book_id, state="fetched", message="no new fields to apply",
+                book_id=book_id,
+                state="fetched",
+                message="no new fields to apply",
             )
 
         if to_apply:
@@ -284,7 +313,9 @@ def refresh_metadata(
         if cover_applied:
             parts.append("cover applied")
         return RefreshResult(
-            book_id=book_id, state="fetched", message="; ".join(parts) or "nothing to do",
+            book_id=book_id,
+            state="fetched",
+            message="; ".join(parts) or "nothing to do",
         )
 
 
@@ -307,13 +338,16 @@ def convert_book(
     source_fmt = _pick_source_format([f.upper() for f in available_formats], target)
     if source_fmt is None:
         return ConvertResult(
-            book_id=book_id, state="no_source", message="no convertible source format",
+            book_id=book_id,
+            state="no_source",
+            message="no convertible source format",
         )
 
     src = source_path_resolver(book_id, source_fmt)
     if src is None or not Path(src).exists():
         return ConvertResult(
-            book_id=book_id, state="error",
+            book_id=book_id,
+            state="error",
             message=f"source {source_fmt} file missing on disk",
         )
 
@@ -331,5 +365,7 @@ def convert_book(
             return ConvertResult(book_id=book_id, state="error", message="add_format failed")
 
     return ConvertResult(
-        book_id=book_id, state="done", message=f"converted {source_fmt} → {target}",
+        book_id=book_id,
+        state="done",
+        message=f"converted {source_fmt} → {target}",
     )

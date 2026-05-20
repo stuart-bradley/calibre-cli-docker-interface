@@ -73,9 +73,8 @@ def make_handlers(settings: Settings) -> dict[JobKind, JobHandler]:
         if spool_dir:
             await asyncio.to_thread(shutil.rmtree, spool_dir, ignore_errors=True)
         skipped_pre = len(job.params.get("skipped", []))
-        job.summary = (
-            f"added {added}, duplicates {duplicates}, total {len(paths)}"
-            + (f"; pre-rejected {skipped_pre}" if skipped_pre else "")
+        job.summary = f"added {added}, duplicates {duplicates}, total {len(paths)}" + (
+            f"; pre-rejected {skipped_pre}" if skipped_pre else ""
         )
 
     async def handle_refresh(job: Job) -> None:
@@ -87,8 +86,10 @@ def make_handlers(settings: Settings) -> dict[JobKind, JobHandler]:
             bp.state = "running"
             result = await asyncio.to_thread(
                 calibre_cli.refresh_metadata,
-                settings.library_path, bp.book_id,
-                mode=mode, sources=settings.metadata_sources,
+                settings.library_path,
+                bp.book_id,
+                mode=mode,
+                sources=settings.metadata_sources,
                 fetch_covers=fetch_covers,
             )
             bp.message = result.message
@@ -113,8 +114,11 @@ def make_handlers(settings: Settings) -> dict[JobKind, JobHandler]:
             bp.state = "running"
             result = await asyncio.to_thread(
                 calibre_cli.convert_book,
-                settings.library_path, bp.book_id, target,
-                available_formats=book.formats, source_path_resolver=resolver,
+                settings.library_path,
+                bp.book_id,
+                target,
+                available_formats=book.formats,
+                source_path_resolver=resolver,
             )
             bp.message = result.message
             if result.state == "done":

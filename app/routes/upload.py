@@ -11,8 +11,8 @@ router = APIRouter()
 log = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {".epub", ".azw3", ".mobi", ".pdf", ".kepub", ".cbz", ".cbr", ".fb2", ".lit"}
-MAX_FILE_BYTES = 200 * 1024 * 1024          # 200 MB per file
-MAX_REQUEST_BYTES = 1024 * 1024 * 1024      # 1 GB per request
+MAX_FILE_BYTES = 200 * 1024 * 1024  # 200 MB per file
+MAX_REQUEST_BYTES = 1024 * 1024 * 1024  # 1 GB per request
 
 
 def _sanitise_filename(raw: str) -> str | None:
@@ -83,7 +83,7 @@ async def upload(request: Request, files: list[UploadFile]):
     worker = request.app.state.worker
     worker.enqueue(
         "upload",
-        book_ids=[0] * len(saved),            # placeholder; real ids assigned by handler
+        book_ids=[0] * len(saved),  # placeholder; real ids assigned by handler
         params={"files": [str(p) for p in saved], "spool_dir": str(spool_dir), "skipped": skipped},
     )
 

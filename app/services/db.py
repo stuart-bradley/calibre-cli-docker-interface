@@ -66,9 +66,15 @@ def _placeholders(n: int) -> str:
 
 
 def _fetch_book_aux(
-    conn: sqlite3.Connection, book_ids: list[int],
-) -> tuple[dict[int, list[str]], dict[int, list[str]], dict[int, tuple[str, float | None]],
-           dict[int, list[tuple[str, str]]], dict[int, dict[str, str]]]:
+    conn: sqlite3.Connection,
+    book_ids: list[int],
+) -> tuple[
+    dict[int, list[str]],
+    dict[int, list[str]],
+    dict[int, tuple[str, float | None]],
+    dict[int, list[tuple[str, str]]],
+    dict[int, dict[str, str]],
+]:
     """Single-pass fetch of authors/tags/series/data/identifiers for a page of books.
 
     Returns five dicts keyed by book id. Each is the only query of its kind for
@@ -119,7 +125,8 @@ def _fetch_book_aux(
         data[r["book"]].append((r["format"].upper(), r["name"]))
 
     for r in conn.execute(
-        f"SELECT book, type, val FROM identifiers WHERE book IN ({ph})", params,
+        f"SELECT book, type, val FROM identifiers WHERE book IN ({ph})",
+        params,
     ):
         identifiers[r["book"]][r["type"]] = r["val"]
 
@@ -199,9 +206,7 @@ def list_books(
         params.append(series)
 
     if format:
-        where.append(
-            "EXISTS (SELECT 1 FROM data d WHERE d.book = b.id AND d.format = ?)"
-        )
+        where.append("EXISTS (SELECT 1 FROM data d WHERE d.book = b.id AND d.format = ?)")
         params.append(format.upper())
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
@@ -211,13 +216,12 @@ def list_books(
     offset = (page - 1) * per_page
 
     with connect(library_path) as conn:
-        total = conn.execute(
-            f"SELECT COUNT(*) AS n FROM books b {where_sql}", params
-        ).fetchone()["n"]
+        total = conn.execute(f"SELECT COUNT(*) AS n FROM books b {where_sql}", params).fetchone()[
+            "n"
+        ]
 
         rows = conn.execute(
-            f"SELECT * FROM books b {where_sql} "
-            f"ORDER BY {order_sql} LIMIT ? OFFSET ?",
+            f"SELECT * FROM books b {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
             [*params, per_page, offset],
         ).fetchall()
 
@@ -251,7 +255,9 @@ def get_format_path(library_path: Path, book_id: int, format: str) -> Path | Non
 
 
 def search_suggestions(
-    library_path: Path, prefix: str, limit: int = 5,
+    library_path: Path,
+    prefix: str,
+    limit: int = 5,
 ) -> tuple[list[str], list[str]]:
     """Return ([titles], [authors]) matching prefix (case-insensitive).
 
@@ -263,7 +269,8 @@ def search_suggestions(
     like = f"{escaped}%"
     with connect(library_path) as conn:
         titles = [
-            r["title"] for r in conn.execute(
+            r["title"]
+            for r in conn.execute(
                 "SELECT title FROM books "
                 "WHERE (title LIKE ? ESCAPE '\\' OR sort LIKE ? ESCAPE '\\') "
                 "COLLATE NOCASE ORDER BY sort LIMIT ?",
@@ -271,7 +278,8 @@ def search_suggestions(
             )
         ]
         authors = [
-            r["name"] for r in conn.execute(
+            r["name"]
+            for r in conn.execute(
                 "SELECT name FROM authors "
                 "WHERE (name LIKE ? ESCAPE '\\' OR sort LIKE ? ESCAPE '\\') "
                 "COLLATE NOCASE ORDER BY sort LIMIT ?",
@@ -283,9 +291,7 @@ def search_suggestions(
 
 def get_cover_path(library_path: Path, book_id: int) -> Path | None:
     with connect(library_path) as conn:
-        row = conn.execute(
-            "SELECT path, has_cover FROM books WHERE id = ?", (book_id,)
-        ).fetchone()
+        row = conn.execute("SELECT path, has_cover FROM books WHERE id = ?", (book_id,)).fetchone()
     if row is None or not row["has_cover"]:
         return None
     cover = library_path / row["path"] / "cover.jpg"

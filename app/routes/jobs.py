@@ -13,7 +13,7 @@ _CONVERT_TARGETS = ("EPUB", "AZW3", "MOBI")
 
 
 def _book_ids(book_id: list[int]) -> list[int]:
-    return list(dict.fromkeys(book_id))   # dedupe, preserve order
+    return list(dict.fromkeys(book_id))  # dedupe, preserve order
 
 
 @router.post("/batch/refresh")
@@ -69,6 +69,7 @@ def batch_convert_dialog(
     else:
         common = set.intersection(*formats_per_book.values()) if formats_per_book else set()
         available_targets = [t for t in _CONVERT_TARGETS if t not in common]
+
         def _action(book_id: int, target: str) -> str:
             if target in formats_per_book[book_id]:
                 return f"already has {target}"
@@ -76,8 +77,7 @@ def batch_convert_dialog(
 
         per_target_preview = {
             target: [
-                {"book_id": b.id, "title": b.title, "action": _action(b.id, target)}
-                for b in books
+                {"book_id": b.id, "title": b.title, "action": _action(b.id, target)} for b in books
             ]
             for target in available_targets
         }

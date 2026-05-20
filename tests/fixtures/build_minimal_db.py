@@ -127,33 +127,104 @@ def main() -> None:
     books = [
         # (title, sort, author_id, author_sort, tag_ids, series_id, series_index,
         #  has_cover, formats, identifiers, timestamp)
-        ("Children of Time", "Children of Time", 1, "Tchaikovsky, Adrian",
-         [1], 1, 1.0, True, ["EPUB", "AZW3"], {"isbn": "9781447273288"},
-         "2024-01-15 09:00:00+00:00"),
-        ("Children of Ruin", "Children of Ruin", 1, "Tchaikovsky, Adrian",
-         [1], 1, 2.0, True, ["EPUB"], {"isbn": "9781509865888"},
-         "2024-03-02 10:30:00+00:00"),
-        ("A Wizard of Earthsea", "Wizard of Earthsea, A", 2, "Le Guin, Ursula K.",
-         [2], 2, 1.0, True, ["EPUB", "MOBI"], {"isbn": "9780553262506"},
-         "2023-11-20 14:00:00+00:00"),
-        ("The Tombs of Atuan", "Tombs of Atuan, The", 2, "Le Guin, Ursula K.",
-         [2], 2, 2.0, False, ["EPUB"], {},
-         "2023-12-05 16:00:00+00:00"),
-        ("The Left Hand of Darkness", "Left Hand of Darkness, The", 2, "Le Guin, Ursula K.",
-         [1, 2], None, 1.0, True, ["EPUB", "PDF"], {"isbn": "9780441478125"},
-         "2024-05-10 11:00:00+00:00"),
+        (
+            "Children of Time",
+            "Children of Time",
+            1,
+            "Tchaikovsky, Adrian",
+            [1],
+            1,
+            1.0,
+            True,
+            ["EPUB", "AZW3"],
+            {"isbn": "9781447273288"},
+            "2024-01-15 09:00:00+00:00",
+        ),
+        (
+            "Children of Ruin",
+            "Children of Ruin",
+            1,
+            "Tchaikovsky, Adrian",
+            [1],
+            1,
+            2.0,
+            True,
+            ["EPUB"],
+            {"isbn": "9781509865888"},
+            "2024-03-02 10:30:00+00:00",
+        ),
+        (
+            "A Wizard of Earthsea",
+            "Wizard of Earthsea, A",
+            2,
+            "Le Guin, Ursula K.",
+            [2],
+            2,
+            1.0,
+            True,
+            ["EPUB", "MOBI"],
+            {"isbn": "9780553262506"},
+            "2023-11-20 14:00:00+00:00",
+        ),
+        (
+            "The Tombs of Atuan",
+            "Tombs of Atuan, The",
+            2,
+            "Le Guin, Ursula K.",
+            [2],
+            2,
+            2.0,
+            False,
+            ["EPUB"],
+            {},
+            "2023-12-05 16:00:00+00:00",
+        ),
+        (
+            "The Left Hand of Darkness",
+            "Left Hand of Darkness, The",
+            2,
+            "Le Guin, Ursula K.",
+            [1, 2],
+            None,
+            1.0,
+            True,
+            ["EPUB", "PDF"],
+            {"isbn": "9780441478125"},
+            "2024-05-10 11:00:00+00:00",
+        ),
     ]
 
-    for (title, sort, author_id, author_sort, tag_ids, series_id, series_index,
-         has_cover, formats, identifiers, ts) in books:
+    for (
+        title,
+        sort,
+        author_id,
+        author_sort,
+        tag_ids,
+        series_id,
+        series_index,
+        has_cover,
+        formats,
+        identifiers,
+        ts,
+    ) in books:
         author_name = authors[author_id - 1][0]
         path = f"{author_name}/{title} ({0})"  # patched below
         cur = conn.execute(
             "INSERT INTO books(title, sort, author_sort, path, has_cover, "
             "series_index, timestamp, pubdate, uuid, last_modified) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (title, sort, author_sort, path, int(has_cover), series_index,
-             ts, ts, f"uuid-{title.lower().replace(' ', '-')}", ts),
+            (
+                title,
+                sort,
+                author_sort,
+                path,
+                int(has_cover),
+                series_index,
+                ts,
+                ts,
+                f"uuid-{title.lower().replace(' ', '-')}",
+                ts,
+            ),
         )
         book_id = cur.lastrowid
         # patch path with real book_id
@@ -176,8 +247,7 @@ def main() -> None:
             )
         for fmt in formats:
             conn.execute(
-                "INSERT INTO data(book, format, uncompressed_size, name) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO data(book, format, uncompressed_size, name) VALUES (?, ?, ?, ?)",
                 (book_id, fmt, 123_456, title),
             )
         for typ, val in identifiers.items():

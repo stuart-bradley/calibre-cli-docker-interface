@@ -27,6 +27,7 @@ def health(request: Request, settings: Settings = Depends(get_settings)):
 
     try:
         import ctypes
+
         ctypes.CDLL("libmtp.so.9")
     except OSError:
         checks["mtp"] = "missing libmtp.so.9"

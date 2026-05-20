@@ -66,6 +66,7 @@ def test_batch_convert_lifecycle(client, monkeypatch):
         # ebook-convert is invoked with src + dst; create dst so add_format step passes.
         if argv[0] == "ebook-convert":
             from pathlib import Path
+
             Path(argv[2]).write_bytes(b"converted")
         return subprocess.CompletedProcess(argv, 0, "ok", "")
 
@@ -106,7 +107,7 @@ def test_convert_dialog_marks_will_skip_and_will_convert(client):
     )
     assert resp.status_code == 200
     azw3_table_start = resp.text.index('data-target="AZW3"')
-    azw3_section = resp.text[azw3_table_start:azw3_table_start + 2000]
+    azw3_section = resp.text[azw3_table_start : azw3_table_start + 2000]
     assert "Children of Time" in azw3_section
     assert "already has AZW3" in azw3_section
     assert "will convert" in azw3_section

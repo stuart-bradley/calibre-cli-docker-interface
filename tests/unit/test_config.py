@@ -15,10 +15,17 @@ def _clear_settings_cache():
 @pytest.fixture
 def _clear_env(monkeypatch):
     for key in [
-        "LIBRARY_PATH", "DATA_PATH", "PUID", "PGID", "TZ",
-        "CALIBRE_WEB_CLI_PORT", "CALIBRE_WEB_CLI_PASSWORD",
-        "CALIBRE_WEB_CLI_METADATA_SOURCES", "CALIBRE_WEB_CLI_DEVICE_FORMAT_ORDER",
-        "CALIBRE_WEB_CLI_PAGE_SIZE", "CALIBRE_WEB_CLI_MTP_USB_IDS",
+        "LIBRARY_PATH",
+        "DATA_PATH",
+        "PUID",
+        "PGID",
+        "TZ",
+        "CALIBRE_WEB_CLI_PORT",
+        "CALIBRE_WEB_CLI_PASSWORD",
+        "CALIBRE_WEB_CLI_METADATA_SOURCES",
+        "CALIBRE_WEB_CLI_DEVICE_FORMAT_ORDER",
+        "CALIBRE_WEB_CLI_PAGE_SIZE",
+        "CALIBRE_WEB_CLI_MTP_USB_IDS",
         "CALIBRE_WEB_CLI_SNAPSHOT_RETENTION_DAYS",
     ]:
         monkeypatch.delenv(key, raising=False)
@@ -106,7 +113,11 @@ def test_int_fields_parse(_clear_env, monkeypatch):
 
     s = Settings()
     assert (s.puid, s.pgid, s.port, s.page_size, s.snapshot_retention_days) == (
-        1026, 100, 9090, 24, 7,
+        1026,
+        100,
+        9090,
+        24,
+        7,
     )
 
 

@@ -5,6 +5,7 @@ def test_health_returns_200_when_all_ok(client, monkeypatch):
     # MTP check uses ctypes.CDLL("libmtp.so.9") which may not be installed in the
     # CI environment; stub it.
     import ctypes
+
     monkeypatch.setattr(ctypes, "CDLL", lambda name: None)
 
     resp = client.get("/health")
@@ -35,6 +36,7 @@ def test_health_503_when_poller_records_error(client, monkeypatch):
     failed silently. With the deepened check, a recorded poller error surfaces
     as mtp:error and the response is 503."""
     import ctypes
+
     monkeypatch.setattr(ctypes, "CDLL", lambda name: None)
 
     client.app.state.device_state.last_detect_error = (
@@ -52,6 +54,7 @@ def test_health_503_when_poller_records_error(client, monkeypatch):
 def test_health_ok_when_poller_clear_after_error(client, monkeypatch):
     """If a previous error was cleared (poller recovered), /health goes back to ok."""
     import ctypes
+
     monkeypatch.setattr(ctypes, "CDLL", lambda name: None)
 
     state = client.app.state.device_state

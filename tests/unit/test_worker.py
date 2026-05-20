@@ -37,9 +37,12 @@ async def test_strict_serial_execution():
     job_ids = [j.id for j in jobs]
     seq = [(jid, phase) for jid, phase, _t in events]
     assert seq == [
-        (job_ids[0], "start"), (job_ids[0], "end"),
-        (job_ids[1], "start"), (job_ids[1], "end"),
-        (job_ids[2], "start"), (job_ids[2], "end"),
+        (job_ids[0], "start"),
+        (job_ids[0], "end"),
+        (job_ids[1], "start"),
+        (job_ids[1], "end"),
+        (job_ids[2], "start"),
+        (job_ids[2], "end"),
     ]
     # And there is no overlap: each end precedes the next start.
     times = {(jid, phase): t for jid, phase, t in events}

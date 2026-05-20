@@ -37,11 +37,11 @@ def test_per_page_cookie_set_when_query_param_provided(client):
 
 
 def test_per_page_cookie_respected_on_next_request(client):
+    """5 books / 2 per page = 3 pages; template emits 'Page 1 of 3'."""
     client.get("/?per_page=2")
     resp = client.get("/")
 
-    # With per_page=2 there should be a "Page 1 of 3" or similar pagination.
-    assert "of 3" in resp.text or "of " in resp.text
+    assert "Page 1 of 3" in resp.text
 
 
 def test_detail_view(client):

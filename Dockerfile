@@ -56,9 +56,11 @@ RUN set -eux; \
     command -v fetch-ebook-metadata
 
 WORKDIR /app
-COPY pyproject.toml /app/
-RUN pip install --no-cache-dir --break-system-packages /app
+# Copy everything pip needs to build the wheel: pyproject.toml declares
+# `readme = "README.md"` so hatchling reads it during metadata generation.
+COPY pyproject.toml README.md /app/
 COPY app /app/app
+RUN pip install --no-cache-dir --break-system-packages /app
 
 EXPOSE 8084
 

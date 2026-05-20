@@ -15,6 +15,13 @@ from app.services.mtp_helper import DetectResult
 class DeviceState:
     detect: DetectResult | None = None
     on_device_filenames: set[str] = field(default_factory=set)
+    # Last error from the device poller. None = the most recent tick succeeded
+    # (whether or not a device was plugged in). /health reads this to
+    # distinguish "MTP stack working but no device" from "MTP stack broken".
+    last_detect_error: str | None = None
+    # True once the poller has finished at least one tick. /health stays
+    # pessimistic until then so a slow first init doesn't get a false-OK.
+    has_polled: bool = False
 
     def is_connected(self) -> bool:
         return bool(self.detect and self.detect.connected)

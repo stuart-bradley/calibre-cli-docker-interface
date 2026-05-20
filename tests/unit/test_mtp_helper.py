@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -153,6 +155,99 @@ async def test_non_json_output_raises(fake_helper):
 
 
 # --- lock guard ---------------------------------------------------------------
+
+
+# --- _build_driver (NAS bug fix: GUI-side attributes) -----------------------
+
+
+def _install_fake_calibre(monkeypatch):
+    """Inject minimal fake calibre.* modules into sys.modules so _build_driver
+    can import them. Returns (MTP_DEVICE_class, instance_capture)."""
+    instances: list[object] = []
+
+    class _FakeMTP:
+        def __init__(self, parent):
+            self.parent = parent
+            self.startup_called = False
+            instances.append(self)
+
+        def startup(self):
+            self.startup_called = True
+
+    class _FakeJSONConfig:
+        def __init__(self, name):
+            self.name = name
+
+    driver_mod = types.ModuleType("calibre.devices.mtp.driver")
+    driver_mod.MTP_DEVICE = _FakeMTP
+    config_mod = types.ModuleType("calibre.utils.config")
+    config_mod.JSONConfig = _FakeJSONConfig
+
+    monkeypatch.setitem(sys.modules, "calibre", types.ModuleType("calibre"))
+    monkeypatch.setitem(sys.modules, "calibre.devices", types.ModuleType("calibre.devices"))
+    monkeypatch.setitem(sys.modules, "calibre.devices.mtp", types.ModuleType("calibre.devices.mtp"))
+    monkeypatch.setitem(sys.modules, "calibre.devices.mtp.driver", driver_mod)
+    monkeypatch.setitem(sys.modules, "calibre.utils", types.ModuleType("calibre.utils"))
+    monkeypatch.setitem(sys.modules, "calibre.utils.config", config_mod)
+    return _FakeMTP, instances
+
+
+def test_build_driver_calls_startup_and_sets_gui_attributes(monkeypatch):
+    """NAS bug: detect_managed_devices() internally opens the device, which
+    raises AttributeError on `prefs` unless the GUI-side init has run.
+    Verify _build_driver sets all three attributes BEFORE returning."""
+    _FakeMTP, instances = _install_fake_calibre(monkeypatch)
+
+    drv = mtp_helper._build_driver()
+
+    assert isinstance(drv, _FakeMTP)
+    assert drv.startup_called is True
+    # The three attributes the upstream GUI device-manager init sets:
+    assert hasattr(drv, "prefs")
+    assert drv.prefs.name == "mtp_devices"  # JSONConfig("mtp_devices")
+    assert callable(drv.report_progress)
+    # report_progress should be a safe no-op
+    drv.report_progress("anything", percent=50)
+    assert drv.current_friendly_name is None
+
+
+def test_cli_detect_uses_build_driver(monkeypatch, capsys):
+    """Smoke-test: _cli_detect goes through _build_driver, so a fake driver
+    that records detect_managed_devices is called and returns no devices."""
+    _FakeMTP, instances = _install_fake_calibre(monkeypatch)
+
+    # Extend the fake to satisfy _cli_detect's needs.
+    detect_calls: list[object] = []
+
+    def detect_managed_devices(self, scanner_devices):
+        detect_calls.append(scanner_devices)
+        return []
+
+    _FakeMTP.detect_managed_devices = detect_managed_devices
+
+    # Provide a minimal scanner module.
+    scanner_mod = types.ModuleType("calibre.devices.scanner")
+
+    class _FakeScanner:
+        def __init__(self):
+            self.devices = []
+
+        def scan(self):
+            pass
+
+    scanner_mod.DeviceScanner = _FakeScanner
+    monkeypatch.setitem(sys.modules, "calibre.devices.scanner", scanner_mod)
+
+    mtp_helper._cli_detect()
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out.strip())
+    assert payload == {"connected": False, "device": None}
+    # The fake driver instance was created with .startup() and .prefs set,
+    # then detect_managed_devices() was called on it.
+    assert len(instances) == 1
+    assert instances[0].startup_called is True
+    assert detect_calls == [[]]
 
 
 async def test_non_overlap_lock_serialises_calls(monkeypatch):

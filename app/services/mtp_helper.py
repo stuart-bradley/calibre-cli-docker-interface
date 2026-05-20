@@ -127,15 +127,35 @@ def _parse_usb_id_filter() -> set[tuple[str, str]]:
     return out
 
 
-def _cli_detect() -> None:
-    # Imports deferred so caller-mode tests do not require calibre installed.
+def _build_driver():
+    """Construct an MTP_DEVICE with the GUI-side attributes the headless
+    constructor skips. Without these, detect_managed_devices() raises
+    AttributeError on `prefs` during its internal open() probe and swallows
+    the exception — returning None and making the UI report "no device" even
+    when libmtp sees the device. See upstream calibre GUI device-manager init.
+    """
     from calibre.devices.mtp.driver import MTP_DEVICE  # type: ignore
+    from calibre.utils.config import JSONConfig  # type: ignore
+
+    drv = MTP_DEVICE(None)
+    drv.startup()
+    drv.prefs = JSONConfig("mtp_devices")
+    drv.report_progress = lambda *a, **k: None
+    drv.current_friendly_name = None
+    return drv
+
+
+def _scan_and_detect(driver):
     from calibre.devices.scanner import DeviceScanner  # type: ignore
 
     scanner = DeviceScanner()
     scanner.scan()
-    driver = MTP_DEVICE(None)
-    connected_devs = driver.detect_managed_devices(scanner.devices) or []
+    return driver.detect_managed_devices(scanner.devices) or []
+
+
+def _cli_detect() -> None:
+    driver = _build_driver()
+    connected_devs = _scan_and_detect(driver)
 
     id_filter = _parse_usb_id_filter()
     selected = None
@@ -157,13 +177,8 @@ def _cli_detect() -> None:
 
 
 def _cli_list() -> None:
-    from calibre.devices.mtp.driver import MTP_DEVICE  # type: ignore
-    from calibre.devices.scanner import DeviceScanner  # type: ignore
-
-    scanner = DeviceScanner()
-    scanner.scan()
-    driver = MTP_DEVICE(None)
-    devs = driver.detect_managed_devices(scanner.devices) or []
+    driver = _build_driver()
+    devs = _scan_and_detect(driver)
     if not devs:
         _print({"ok": False, "error": "no device"})
         return
@@ -175,13 +190,8 @@ def _cli_list() -> None:
 
 
 def _cli_send(local: str, dest: str) -> None:
-    from calibre.devices.mtp.driver import MTP_DEVICE  # type: ignore
-    from calibre.devices.scanner import DeviceScanner  # type: ignore
-
-    scanner = DeviceScanner()
-    scanner.scan()
-    driver = MTP_DEVICE(None)
-    devs = driver.detect_managed_devices(scanner.devices) or []
+    driver = _build_driver()
+    devs = _scan_and_detect(driver)
     if not devs:
         _print({"ok": False, "error": "no device"})
         return
@@ -192,13 +202,8 @@ def _cli_send(local: str, dest: str) -> None:
 
 
 def _cli_remove(dest: str) -> None:
-    from calibre.devices.mtp.driver import MTP_DEVICE  # type: ignore
-    from calibre.devices.scanner import DeviceScanner  # type: ignore
-
-    scanner = DeviceScanner()
-    scanner.scan()
-    driver = MTP_DEVICE(None)
-    devs = driver.detect_managed_devices(scanner.devices) or []
+    driver = _build_driver()
+    devs = _scan_and_detect(driver)
     if not devs:
         _print({"ok": False, "error": "no device"})
         return

@@ -33,8 +33,10 @@ async def poll_device_loop(settings: Settings, state: DeviceState, interval: flo
                 log.debug("mtp detect failed: %s", exc)
                 state.detect = None
                 state.on_device_filenames = set()
+                state.last_detect_error = str(exc)
             else:
                 state.detect = detect
+                state.last_detect_error = None
                 if detect.connected:
                     try:
                         files = await mtp_helper.list_files()
@@ -46,10 +48,13 @@ async def poll_device_loop(settings: Settings, state: DeviceState, interval: flo
                     state.on_device_filenames = set()
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             log.exception("device poller tick failed; continuing")
             state.detect = None
             state.on_device_filenames = set()
+            state.last_detect_error = f"{type(exc).__name__}: {exc}"
+        finally:
+            state.has_polled = True
         await asyncio.sleep(interval)
 
 

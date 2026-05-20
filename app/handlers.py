@@ -14,6 +14,7 @@ from pathlib import Path
 from app.config import Settings
 from app.services import calibre_cli, db, mtp_helper, snapshot
 from app.services.worker import Job, JobHandler, JobKind, Worker
+from app.state import DeviceState
 
 
 async def _snapshot(settings: Settings) -> None:
@@ -47,7 +48,7 @@ def _device_filename(settings: Settings, book) -> tuple[Path | None, str | None]
     return src, chosen
 
 
-def make_handlers(settings: Settings) -> dict[JobKind, JobHandler]:
+def make_handlers(settings: Settings, device_state: DeviceState) -> dict[JobKind, JobHandler]:
     async def handle_upload(job: Job) -> None:
         await _snapshot(settings)
         paths: list[Path] = [Path(p) for p in job.params.get("files", [])]
@@ -151,6 +152,11 @@ def make_handlers(settings: Settings) -> dict[JobKind, JobHandler]:
                 continue
             try:
                 await mtp_helper.send(src, src.name)
+                # Optimistic cache update — the poller no longer re-lists files
+                # while the device is on the bus (see services.device), so the
+                # "on-device" badge for the book the user just sent would
+                # otherwise not appear until the next replug.
+                device_state.on_device_filenames.add(src.name)
                 bp.state = "done"
                 bp.message = f"sent {chosen}"
             except mtp_helper.MTPHelperError as exc:
@@ -179,6 +185,7 @@ def make_handlers(settings: Settings) -> dict[JobKind, JobHandler]:
             dest_name = src.name if src is not None else f"{book.title}.{chosen.lower()}"
             try:
                 await mtp_helper.remove(dest_name)
+                device_state.on_device_filenames.discard(dest_name)
                 bp.state = "done"
             except mtp_helper.MTPHelperError as exc:
                 bp.state = "failed"
@@ -195,6 +202,6 @@ def make_handlers(settings: Settings) -> dict[JobKind, JobHandler]:
     }
 
 
-def register_handlers(worker: Worker, settings: Settings) -> None:
-    for kind, handler in make_handlers(settings).items():
+def register_handlers(worker: Worker, settings: Settings, device_state: DeviceState) -> None:
+    for kind, handler in make_handlers(settings, device_state).items():
         worker.register_handler(kind, handler)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -22,13 +23,21 @@ from app.services.worker import Worker
 from app.state import DeviceState
 from app.templating import STATIC_DIR
 
+log = logging.getLogger(__name__)
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
 
+    if not settings.mtp_usb_ids:
+        log.warning(
+            "CALIBRE_WEB_CLI_MTP_USB_IDS is unset — device detection disabled. "
+            "Set this env var to your Kindle's VID:PID (e.g. 1949:9981) to enable."
+        )
+
     worker = Worker()
-    register_handlers(worker, settings)
     device_state = DeviceState()
+    register_handlers(worker, settings, device_state)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

@@ -296,7 +296,8 @@ def test_cli_detect_wraps_single_device_namedtuple(monkeypatch, capsys):
     )
     kindle = MTPDevice(
         busnum=1, devnum=13, vendor_id=0x1949, product_id=0x9981, bcd=0x0223,
-        serial="GN433W0743220177", manufacturer="Amazon", product="Kindle Paperwhite Signature Edition",
+        serial="GN433W0743220177", manufacturer="Amazon",
+        product="Kindle Paperwhite Signature Edition",
     )
 
     def detect_managed_devices(self, scanner_devices):

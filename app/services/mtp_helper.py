@@ -199,35 +199,14 @@ def _cli_detect() -> None:
 
 
 def _cli_list() -> None:
-    driver = _build_driver()
-    devs = _scan_and_detect(driver)
-    if not devs:
-        _print({"ok": False, "error": "no device"})
-        return
-    driver.open(devs[0], "library")
-    files: list[dict] = []
-    for sf in driver.list("documents", recurse=True):
-        files.append({"path": sf.full_path, "size": sf.size})
-    _print({"ok": True, "files": files})
+    """List files in the Kindle's ``/documents`` folder.
 
-
-def _cli_send(local: str, dest: str) -> None:
-    """Upload ``local`` to the device, naming it ``dest`` in the main ebooks
-    folder.
-
-    Uses Calibre's high-level ``MTP_DEVICE.upload_books`` rather than the
-    lower-level ``put_file``: the previous implementation called
-    ``driver.put_file(driver.root("documents"), ...)`` but ``MTP_DEVICE`` on
-    Calibre 9.8 has no ``root`` attribute — every send failed with
-    ``AttributeError: 'MTP_DEVICE' object has no attribute 'root'`` (the
-    Calibre GUI uses ``upload_books`` exclusively; the storage root /
-    destination folder is resolved internally from the device's filesystem
-    cache and metadata).
-
-    ``end_session=False`` keeps the MTP session open after the upload
-    finishes. The jailbroken Kindle MTP-only firmware appears to drop the
-    device off the USB bus on every explicit ``CloseSession``; deferring the
-    close to subprocess teardown is the leading hypothesis for avoiding that.
+    Walks the cached MTP filesystem tree via ``FilesystemCache.storage(...)``
+    and ``find_path``. Deliberately avoids ``MTP_DEVICE.list()``: on Calibre
+    9.8 that path raises ``UnboundLocalError: cannot access local variable
+    'q' where it is not associated with a value`` for this firmware (a
+    Calibre internal bug). The filesystem cache is populated during
+    ``driver.open``, so we just traverse it ourselves.
     """
     driver = _build_driver()
     devs = _scan_and_detect(driver)
@@ -235,19 +214,73 @@ def _cli_send(local: str, dest: str) -> None:
         _print({"ok": False, "error": "no device"})
         return
     driver.open(devs[0], "library")
-    with open(local, "rb") as fh:
-        driver.upload_books([fh], [dest], end_session=False)
-    _print({"ok": True, "dest": f"documents/{dest}"})
+    storage = driver.filesystem_cache.storage(driver._main_id)
+    documents = storage.find_path(("documents",)) if storage is not None else None
+    files: list[dict] = []
+    if documents is not None:
+        for f in documents.files:
+            files.append({"path": "/".join(f.full_path), "size": getattr(f, "size", 0)})
+    _print({"ok": True, "files": files})
 
 
-def _cli_remove(dest: str) -> None:
+def _cli_send(local: str, dest: str) -> None:
+    """Upload ``local`` to the Kindle's ``/documents`` folder, named ``dest``.
+
+    Calibre 9.8 ``MTP_DEVICE`` has no ``root(name)`` method — the previous
+    code (``driver.put_file(driver.root("documents"), ...)``) failed every
+    time with ``AttributeError: 'MTP_DEVICE' object has no attribute 'root'``.
+    The correct way (mirroring ``MTP_DEVICE.upload_books`` internally) is:
+
+    1. ``storage = driver.filesystem_cache.storage(driver._main_id)`` — the
+       device's main storage root, populated lazily during ``driver.open``.
+    2. ``parent = storage.find_path(("documents",))`` — case-insensitive folder
+       lookup against the cached MTP filesystem tree.
+    3. ``driver.put_file(parent, dest, stream, size)`` — the actual transfer.
+
+    Bypasses ``upload_books`` deliberately: that requires a list of
+    ``Metadata`` objects (it ``zip``\\s them with files+names) and applies
+    Calibre's ``save_template`` substitution to derive the destination path.
+    We already know the destination filename and folder; no templating
+    needed.
+    """
     driver = _build_driver()
     devs = _scan_and_detect(driver)
     if not devs:
         _print({"ok": False, "error": "no device"})
         return
     driver.open(devs[0], "library")
-    driver.delete_file(f"documents/{dest}")
+    storage = driver.filesystem_cache.storage(driver._main_id)
+    parent = storage.find_path(("documents",))
+    if parent is None:
+        _print({"ok": False, "error": "device has no 'documents' folder"})
+        return
+    size = os.path.getsize(local)
+    with open(local, "rb") as fh:
+        driver.put_file(parent, dest, fh, size)
+    _print({"ok": True, "dest": f"documents/{dest}"})
+
+
+def _cli_remove(dest: str) -> None:
+    """Remove ``documents/<dest>`` from the Kindle.
+
+    Calibre 9.8 ``MTP_DEVICE`` has no ``delete_file`` — the previous code's
+    ``driver.delete_file(f"documents/{dest}")`` would have raised
+    ``AttributeError``. The supported path is to resolve the file via the
+    filesystem cache and call ``recursive_delete`` on it (this is what
+    ``MTP_DEVICE.delete_books`` does internally for each path).
+    """
+    driver = _build_driver()
+    devs = _scan_and_detect(driver)
+    if not devs:
+        _print({"ok": False, "error": "no device"})
+        return
+    driver.open(devs[0], "library")
+    storage = driver.filesystem_cache.storage(driver._main_id)
+    target = storage.find_path(("documents", dest)) if storage is not None else None
+    if target is None:
+        _print({"ok": False, "error": f"documents/{dest} not found on device"})
+        return
+    driver.recursive_delete(target)
     _print({"ok": True})
 
 

@@ -8,6 +8,7 @@ poller and HTMX progress fragments share it).
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from app.config import Settings
 from app.services import calibre_cli, db, mtp_helper, snapshot
 from app.services.worker import Job, JobHandler, JobKind, Worker
 from app.state import DeviceState
+
+log = logging.getLogger(__name__)
 
 
 async def _snapshot(settings: Settings) -> None:
@@ -160,6 +163,7 @@ def make_handlers(settings: Settings, device_state: DeviceState) -> dict[JobKind
                 bp.state = "done"
                 bp.message = f"sent {chosen}"
             except mtp_helper.MTPHelperError as exc:
+                log.warning("send failed for book %s (%s): %s", bp.book_id, bp.title, exc)
                 bp.state = "failed"
                 bp.message = str(exc)
         sent = sum(1 for p in job.progress if p.state == "done")
@@ -188,6 +192,7 @@ def make_handlers(settings: Settings, device_state: DeviceState) -> dict[JobKind
                 device_state.on_device_filenames.discard(dest_name)
                 bp.state = "done"
             except mtp_helper.MTPHelperError as exc:
+                log.warning("remove failed for book %s (%s): %s", bp.book_id, bp.title, exc)
                 bp.state = "failed"
                 bp.message = str(exc)
         done = sum(1 for p in job.progress if p.state == "done")

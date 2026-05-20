@@ -16,4 +16,17 @@
     ({{ done }} done{% if failed %}, {{ failed }} failed{% endif %}{% if skipped %}, {{ skipped }} skipped{% endif %})
   </td>
   <td>{{ job.summary or "" }}</td>
+  {%- set noted = job.progress | selectattr("message") | rejectattr("state", "equalto", "done") | list %}
+  <td>
+    {% if noted %}
+      <details>
+        <summary>{{ noted | length }} message(s)</summary>
+        <ul class="job-messages">
+          {%- for bp in noted %}
+          <li><strong>{{ bp.title or bp.book_id }}</strong> ({{ bp.state }}): {{ bp.message }}</li>
+          {%- endfor %}
+        </ul>
+      </details>
+    {% endif %}
+  </td>
 </tr>

@@ -17,6 +17,7 @@ Two modes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -261,15 +262,39 @@ def _cli_send(local: str, dest: str) -> None:
         _print({"ok": False, "error": "no device"})
         return
     driver.open(devs[0], "library")
-    storage = driver.filesystem_cache.storage(driver._main_id)
-    parent = storage.find_path(("documents",))
-    if parent is None:
-        _print({"ok": False, "error": "device has no 'documents' folder"})
-        return
-    size = os.path.getsize(local)
-    with open(local, "rb") as fh:
-        driver.put_file(parent, dest, fh, size)
-    _print({"ok": True, "dest": f"documents/{dest}"})
+    try:
+        storage = driver.filesystem_cache.storage(driver._main_id)
+        parent = storage.find_path(("documents",))
+        if parent is None:
+            _print({"ok": False, "error": "device has no 'documents' folder"})
+            return
+        size = os.path.getsize(local)
+        with open(local, "rb") as fh:
+            mtp_file = driver.put_file(parent, dest, fh, size)
+        if mtp_file is None:
+            _print({"ok": False, "error": "put_file returned None (transfer not acknowledged)"})
+            return
+        result_size = getattr(mtp_file, "size", None)
+        if result_size is not None and result_size != size:
+            _print(
+                {
+                    "ok": False,
+                    "error": (
+                        f"size mismatch after put_file: sent {size}, device reports {result_size}"
+                    ),
+                }
+            )
+            return
+        _print({"ok": True, "dest": f"documents/{dest}", "size": result_size or size})
+    finally:
+        # Explicit MTP CloseSession via shutdown(). Without this libmtp's
+        # destructor closes the connection abruptly at subprocess exit, and
+        # MTP devices like the Kindle may treat an abrupt drop as "host
+        # crashed" and discard the in-flight file rather than commit it.
+        # The Kindle firmware will drop the USB device on the close — that
+        # is expected (and unavoidable on this firmware).
+        with contextlib.suppress(Exception):
+            driver.shutdown()
 
 
 def _cli_remove(dest: str) -> None:
@@ -287,13 +312,17 @@ def _cli_remove(dest: str) -> None:
         _print({"ok": False, "error": "no device"})
         return
     driver.open(devs[0], "library")
-    storage = driver.filesystem_cache.storage(driver._main_id)
-    target = storage.find_path(("documents", dest)) if storage is not None else None
-    if target is None:
-        _print({"ok": False, "error": f"documents/{dest} not found on device"})
-        return
-    driver.recursive_delete(target)
-    _print({"ok": True})
+    try:
+        storage = driver.filesystem_cache.storage(driver._main_id)
+        target = storage.find_path(("documents", dest)) if storage is not None else None
+        if target is None:
+            _print({"ok": False, "error": f"documents/{dest} not found on device"})
+            return
+        driver.recursive_delete(target)
+        _print({"ok": True})
+    finally:
+        with contextlib.suppress(Exception):
+            driver.shutdown()
 
 
 def _main(argv: list[str]) -> int:

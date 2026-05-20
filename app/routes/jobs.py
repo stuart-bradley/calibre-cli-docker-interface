@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from app.templating import templates
+
 router = APIRouter()
 
 
@@ -52,8 +54,6 @@ def batch_remove(request: Request, book_id: list[int] = Form(...)):
 
 @router.get("/jobs", response_class=HTMLResponse)
 def list_jobs(request: Request):
-    from app.main import templates
-
     worker = request.app.state.worker
     return templates.TemplateResponse(
         request,
@@ -64,8 +64,6 @@ def list_jobs(request: Request):
 
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
 def get_job(job_id: str, request: Request):
-    from app.main import templates
-
     worker = request.app.state.worker
     job = worker.get_job(job_id)
     if job is None:
@@ -79,8 +77,6 @@ def get_job(job_id: str, request: Request):
 
 @router.get("/jobs/{job_id}/fragment", response_class=HTMLResponse)
 def job_fragment(job_id: str, request: Request):
-    from app.main import templates
-
     worker = request.app.state.worker
     job = worker.get_job(job_id)
     if job is None:

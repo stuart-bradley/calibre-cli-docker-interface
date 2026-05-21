@@ -45,7 +45,7 @@ def test_defaults_with_only_required_set(_clear_env, monkeypatch):
     assert s.port == 8084
     assert s.password is None
     assert s.metadata_sources == ["Amazon", "Google"]
-    assert s.device_format_order == ["EPUB", "AZW3", "MOBI", "PDF"]
+    assert s.device_format_order == ["AZW3", "MOBI", "PDF", "EPUB"]
     assert s.page_size == 48
     assert s.mtp_usb_ids == []
     assert s.snapshot_retention_days == 14

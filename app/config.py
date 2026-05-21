@@ -31,8 +31,12 @@ class Settings(BaseSettings):
     metadata_sources: Annotated[list[str], NoDecode] = Field(
         default=["Amazon", "Google"], validation_alias="CALIBRE_WEB_CLI_METADATA_SOURCES"
     )
+    # AZW3/MOBI first because the Kindle library indexer only registers
+    # Amazon-native formats. EPUB on the device is invisible to the library
+    # UI (see app/services/calibre_cli.py:convert_to_temp_file for the
+    # send-side fallback when EPUB is the only available format).
     device_format_order: Annotated[list[str], NoDecode] = Field(
-        default=["EPUB", "AZW3", "MOBI", "PDF"],
+        default=["AZW3", "MOBI", "PDF", "EPUB"],
         validation_alias="CALIBRE_WEB_CLI_DEVICE_FORMAT_ORDER",
     )
     page_size: int = Field(default=48, validation_alias="CALIBRE_WEB_CLI_PAGE_SIZE")

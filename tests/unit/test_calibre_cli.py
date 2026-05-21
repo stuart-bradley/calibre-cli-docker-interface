@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -311,6 +312,94 @@ def test_convert_no_source_format():
     )
 
     assert result.state == "no_source"
+
+
+# --- convert_to_temp_file -----------------------------------------------------
+
+
+def test_convert_to_temp_file_returns_path_with_preserved_stem(tmp_path, monkeypatch, run_calls):
+    src = tmp_path / "Some Book - An Author.epub"
+    src.write_bytes(b"epub bytes")
+
+    def fake_run(argv, *, input=None):
+        run_calls.append(argv)
+        if argv[0] == "ebook-convert":
+            # Simulate a successful conversion by creating the output file.
+            Path(argv[2]).write_bytes(b"azw3 bytes")
+        return subprocess.CompletedProcess(argv, 0, "ok", "")
+
+    monkeypatch.setattr(calibre_cli, "_run", fake_run)
+
+    out = calibre_cli.convert_to_temp_file(src, "AZW3")
+
+    assert out is not None
+    assert out.exists()
+    # Same stem as the source, AZW3 extension, in a fresh temp dir.
+    assert out.name == "Some Book - An Author.azw3"
+    assert out.parent != src.parent
+    assert tempfile.gettempdir() in str(out)
+    convert_argv = run_calls[0]
+    assert convert_argv[0] == "ebook-convert"
+    assert convert_argv[1] == str(src)
+    assert convert_argv[2] == str(out)
+
+
+def test_convert_to_temp_file_returns_none_on_nonzero_exit(tmp_path, monkeypatch, run_calls):
+    src = tmp_path / "Book.epub"
+    src.write_bytes(b"epub")
+
+    def fake_run(argv, *, input=None):
+        run_calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1, "", "boom")
+
+    monkeypatch.setattr(calibre_cli, "_run", fake_run)
+
+    assert calibre_cli.convert_to_temp_file(src, "AZW3") is None
+
+
+def test_convert_to_temp_file_returns_none_on_empty_output(tmp_path, monkeypatch, run_calls):
+    """ebook-convert can exit 0 but leave an empty file when the source is
+    malformed in a way the converter mishandles silently. Treat zero-byte
+    output as failure so the caller doesn't ship junk to the device."""
+    src = tmp_path / "Book.epub"
+    src.write_bytes(b"epub")
+
+    def fake_run(argv, *, input=None):
+        run_calls.append(argv)
+        if argv[0] == "ebook-convert":
+            Path(argv[2]).touch()
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(calibre_cli, "_run", fake_run)
+
+    assert calibre_cli.convert_to_temp_file(src, "AZW3") is None
+
+
+def test_convert_to_temp_file_cleans_up_failed_tmpdir(tmp_path, monkeypatch, run_calls):
+    """No partial tmp directory should be left behind on failure."""
+    src = tmp_path / "Book.epub"
+    src.write_bytes(b"epub")
+
+    seen_tmpdirs: list[Path] = []
+
+    real_mkdtemp = tempfile.mkdtemp
+
+    def tracking_mkdtemp(*a, **k):
+        d = real_mkdtemp(*a, **k)
+        seen_tmpdirs.append(Path(d))
+        return d
+
+    monkeypatch.setattr(calibre_cli.tempfile, "mkdtemp", tracking_mkdtemp)
+    monkeypatch.setattr(
+        calibre_cli,
+        "_run",
+        lambda argv, *, input=None: subprocess.CompletedProcess(argv, 1, "", "boom"),
+    )
+
+    assert calibre_cli.convert_to_temp_file(src, "AZW3") is None
+    assert seen_tmpdirs, "test setup: mkdtemp should have been called"
+    for d in seen_tmpdirs:
+        assert not d.exists()
 
 
 # --- logging ------------------------------------------------------------------

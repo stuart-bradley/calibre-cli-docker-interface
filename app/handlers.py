@@ -51,6 +51,45 @@ def _device_filename(settings: Settings, book) -> tuple[Path | None, str | None]
     return src, chosen
 
 
+# Formats we want present on every uploaded book so the on-device library
+# (Amazon-native AZW3/MOBI) and other readers (raw EPUB) both work without
+# on-the-fly conversion at send time.
+_AUTOCONVERT_TARGETS: tuple[str, ...] = ("AZW3", "MOBI", "EPUB")
+
+
+async def _autoconvert_all_formats(settings: Settings, book_id: int) -> list[str]:
+    """Convert ``book_id`` into every target format in ``_AUTOCONVERT_TARGETS``
+    that isn't already present. Returns the list of formats actually produced.
+    Errors are logged and skipped — a missing format here is not fatal to the
+    upload job; the user just loses the future-send acceleration.
+    """
+    book = await asyncio.to_thread(db.get_book, settings.library_path, book_id)
+    if book is None:
+        return []
+    existing = {f.upper() for f in book.formats}
+
+    def resolver(bid: int, fmt: str):
+        return db.get_format_path(settings.library_path, bid, fmt)
+
+    produced: list[str] = []
+    for target in _AUTOCONVERT_TARGETS:
+        if target in existing:
+            continue
+        result = await asyncio.to_thread(
+            calibre_cli.convert_book,
+            settings.library_path,
+            book_id,
+            target,
+            available_formats=sorted(existing | set(produced)),
+            source_path_resolver=resolver,
+        )
+        if result.state == "done":
+            produced.append(target)
+        else:
+            log.info("autoconvert book %s -> %s: %s", book_id, target, result.message)
+    return produced
+
+
 def make_handlers(settings: Settings, device_state: DeviceState) -> dict[JobKind, JobHandler]:
     async def handle_upload(job: Job) -> None:
         await _snapshot(settings)
@@ -62,11 +101,17 @@ def make_handlers(settings: Settings, device_state: DeviceState) -> dict[JobKind
             bp.title = path.name
             bp.state = "running"
             result = await asyncio.to_thread(calibre_cli.add_book, settings.library_path, path)
-            if result.added:
-                bp.book_id = result.book_id or bp.book_id
+            if result.added and result.book_id is not None:
+                bp.book_id = result.book_id
                 bp.state = "done"
                 bp.message = f"added id {result.book_id}"
                 added += 1
+                # Eagerly convert into every reader-compatible format that
+                # isn't already present, so future sends never need on-the-fly
+                # conversion (the Kindle indexer skips EPUB — see handle_send).
+                produced = await _autoconvert_all_formats(settings, result.book_id)
+                if produced:
+                    bp.message += f"; converted to {', '.join(produced)}"
             elif result.duplicate:
                 bp.state = "skipped"
                 bp.message = "duplicate"
@@ -153,19 +198,40 @@ def make_handlers(settings: Settings, device_state: DeviceState) -> dict[JobKind
                 bp.state = "failed"
                 bp.message = f"{chosen} file missing on disk"
                 continue
+            # Kindle library indexer skips EPUB; convert to AZW3 transiently
+            # before sending so the book actually appears in the library UI.
+            # Upload-time autoconvert means most books already have AZW3 in
+            # the library and this branch is rarely taken — but it's a
+            # necessary fallback for books that only have EPUB.
+            send_src = src
+            send_label = f"sent {chosen}"
+            converted_tmp: Path | None = None
+            if chosen.upper() == "EPUB":
+                converted_tmp = await asyncio.to_thread(
+                    calibre_cli.convert_to_temp_file, src, "AZW3"
+                )
+                if converted_tmp is None:
+                    bp.state = "failed"
+                    bp.message = "EPUB→AZW3 conversion failed"
+                    continue
+                send_src = converted_tmp
+                send_label = "converted EPUB→AZW3, sent"
             try:
-                await mtp_helper.send(src, src.name)
+                await mtp_helper.send(send_src, send_src.name)
                 # Optimistic cache update — the poller no longer re-lists files
                 # while the device is on the bus (see services.device), so the
                 # "on-device" badge for the book the user just sent would
                 # otherwise not appear until the next replug.
-                device_state.on_device_filenames.add(src.name)
+                device_state.on_device_filenames.add(send_src.name)
                 bp.state = "done"
-                bp.message = f"sent {chosen}"
+                bp.message = send_label
             except mtp_helper.MTPHelperError as exc:
                 log.warning("send failed for book %s (%s): %s", bp.book_id, bp.title, exc)
                 bp.state = "failed"
                 bp.message = str(exc)
+            finally:
+                if converted_tmp is not None:
+                    await asyncio.to_thread(shutil.rmtree, converted_tmp.parent, ignore_errors=True)
         sent = sum(1 for p in job.progress if p.state == "done")
         skipped = sum(1 for p in job.progress if p.state == "skipped")
         job.summary = f"sent {sent}, skipped {skipped}, of {len(job.progress)}"
@@ -184,9 +250,16 @@ def make_handlers(settings: Settings, device_state: DeviceState) -> dict[JobKind
                 bp.state = "skipped"
                 bp.message = "no known filename on device"
                 continue
-            # Use the same naming convention as send. src may be None (file
-            # deleted locally after a send) — that's fine, we only need the name.
-            dest_name = src.name if src is not None else f"{book.title}.{chosen.lower()}"
+            # Use the same naming convention as send. EPUB is converted to
+            # AZW3 by handle_send before reaching the device, so the on-device
+            # filename always carries the AZW3 extension. src may be None
+            # (file deleted locally after a send) — that's fine, we only need
+            # the name.
+            on_device_ext = "azw3" if chosen.upper() == "EPUB" else chosen.lower()
+            if src is not None:
+                dest_name = src.with_suffix(f".{on_device_ext}").name
+            else:
+                dest_name = f"{book.title}.{on_device_ext}"
             try:
                 await mtp_helper.remove(dest_name)
                 device_state.on_device_filenames.discard(dest_name)

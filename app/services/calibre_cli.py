@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -317,6 +318,32 @@ def refresh_metadata(
             state="fetched",
             message="; ".join(parts) or "nothing to do",
         )
+
+
+def convert_to_temp_file(src: Path, target_fmt: str) -> Path | None:
+    """Convert ``src`` to ``target_fmt`` in a fresh temp directory and return
+    the converted file's path. Caller owns cleanup of the returned path's
+    parent directory (use ``shutil.rmtree(result.parent, ignore_errors=True)``).
+    Returns ``None`` if ebook-convert fails or produces an empty file.
+
+    Used by handle_send to convert EPUB → AZW3 on the fly when the Kindle
+    library indexer would otherwise skip the EPUB (see [[kindle-mtp-only-firmware]]).
+    """
+    tmpdir = Path(tempfile.mkdtemp(prefix="cwc-conv-"))
+    dst = tmpdir / f"{src.stem}.{target_fmt.lower()}"
+    proc = _run(["ebook-convert", str(src), str(dst)])
+    if proc.returncode != 0 or not dst.exists() or dst.stat().st_size == 0:
+        log.warning(
+            "ebook-convert %s -> %s failed (rc=%s): %s",
+            src,
+            target_fmt,
+            proc.returncode,
+            (proc.stderr or proc.stdout or "")[:200],
+        )
+        # No partial output worth keeping; clean up immediately.
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return None
+    return dst
 
 
 def _pick_source_format(formats: list[str], target: ConvertTarget) -> str | None:

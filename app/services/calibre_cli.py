@@ -320,6 +320,15 @@ def refresh_metadata(
         )
 
 
+def _sibling_cover(src: Path) -> Path | None:
+    """Calibre stores each book in its own directory with a ``cover.jpg`` next
+    to the format files. Return that path if it exists, else ``None`` — used
+    to feed ``ebook-convert --cover=...`` so the converted output carries the
+    cover into its metadata (and onto the Kindle library tile)."""
+    candidate = src.parent / "cover.jpg"
+    return candidate if candidate.is_file() else None
+
+
 def convert_to_temp_file(src: Path, target_fmt: str) -> Path | None:
     """Convert ``src`` to ``target_fmt`` in a fresh temp directory and return
     the converted file's path. Caller owns cleanup of the returned path's
@@ -331,7 +340,11 @@ def convert_to_temp_file(src: Path, target_fmt: str) -> Path | None:
     """
     tmpdir = Path(tempfile.mkdtemp(prefix="cwc-conv-"))
     dst = tmpdir / f"{src.stem}.{target_fmt.lower()}"
-    proc = _run(["ebook-convert", str(src), str(dst)])
+    argv = ["ebook-convert", str(src), str(dst)]
+    cover = _sibling_cover(src)
+    if cover is not None:
+        argv.append(f"--cover={cover}")
+    proc = _run(argv)
     if proc.returncode != 0 or not dst.exists() or dst.stat().st_size == 0:
         log.warning(
             "ebook-convert %s -> %s failed (rc=%s): %s",
@@ -380,7 +393,11 @@ def convert_book(
 
     with tempfile.TemporaryDirectory() as tmp:
         dst = Path(tmp) / f"{book_id}.{target.lower()}"
-        proc = _run(["ebook-convert", str(src), str(dst)])
+        argv = ["ebook-convert", str(src), str(dst)]
+        cover = _sibling_cover(Path(src))
+        if cover is not None:
+            argv.append(f"--cover={cover}")
+        proc = _run(argv)
         if proc.returncode != 0 or not dst.exists():
             return ConvertResult(
                 book_id=book_id,

@@ -344,6 +344,49 @@ def test_convert_to_temp_file_returns_path_with_preserved_stem(tmp_path, monkeyp
     assert convert_argv[2] == str(out)
 
 
+def test_convert_to_temp_file_passes_sibling_cover(tmp_path, monkeypatch, run_calls):
+    """Calibre stores ``cover.jpg`` next to the book file in each library
+    directory. The converter must pass it through ``--cover=`` so the
+    Kindle library tile renders the right artwork instead of a placeholder."""
+    src = tmp_path / "Book - Author.epub"
+    src.write_bytes(b"epub")
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"\xff\xd8\xff\xe0fake-jpeg")
+
+    def fake_run(argv, *, input=None):
+        run_calls.append(argv)
+        if argv[0] == "ebook-convert":
+            Path(argv[2]).write_bytes(b"azw3")
+        return subprocess.CompletedProcess(argv, 0, "ok", "")
+
+    monkeypatch.setattr(calibre_cli, "_run", fake_run)
+
+    out = calibre_cli.convert_to_temp_file(src, "AZW3")
+
+    assert out is not None
+    convert_argv = run_calls[0]
+    assert f"--cover={cover}" in convert_argv
+
+
+def test_convert_to_temp_file_omits_cover_when_missing(tmp_path, monkeypatch, run_calls):
+    src = tmp_path / "Book - Author.epub"
+    src.write_bytes(b"epub")
+
+    def fake_run(argv, *, input=None):
+        run_calls.append(argv)
+        if argv[0] == "ebook-convert":
+            Path(argv[2]).write_bytes(b"azw3")
+        return subprocess.CompletedProcess(argv, 0, "ok", "")
+
+    monkeypatch.setattr(calibre_cli, "_run", fake_run)
+
+    out = calibre_cli.convert_to_temp_file(src, "AZW3")
+
+    assert out is not None
+    convert_argv = run_calls[0]
+    assert not any(a.startswith("--cover=") for a in convert_argv)
+
+
 def test_convert_to_temp_file_returns_none_on_nonzero_exit(tmp_path, monkeypatch, run_calls):
     src = tmp_path / "Book.epub"
     src.write_bytes(b"epub")

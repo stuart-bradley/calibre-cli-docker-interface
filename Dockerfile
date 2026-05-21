@@ -56,6 +56,11 @@ RUN set -eux; \
     command -v fetch-ebook-metadata
 
 WORKDIR /app
+# The app's `data_path` default is `./data` (handy for local non-container
+# dev); inside the image it would resolve to /app/data, which is owned by
+# root and not writable by the unprivileged runtime user. Pin it to /data
+# so the image matches the bind-mount + entrypoint chown contract.
+ENV DATA_PATH=/data
 # Copy everything pip needs to build the wheel: pyproject.toml declares
 # `readme = "README.md"` so hatchling reads it during metadata generation.
 COPY pyproject.toml README.md /app/

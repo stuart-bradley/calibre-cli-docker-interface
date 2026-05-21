@@ -1,7 +1,12 @@
 {# Inputs: books (list[Book]), available_targets (list[str]), per_target_preview (dict[str, list[{book_id, title, action}]]) #}
 <h3>Convert books</h3>
 
-{% if not available_targets %}
+{% if not books %}
+  <p>No books selected — pick books from the library first.</p>
+  <div class="modal-actions">
+    <button type="button" onclick="this.closest('dialog').close()">Close</button>
+  </div>
+{% elif not available_targets %}
   <p>All selected books already have all available target formats — nothing to convert.</p>
   <div class="modal-actions">
     <button type="button" onclick="this.closest('dialog').close()">Close</button>

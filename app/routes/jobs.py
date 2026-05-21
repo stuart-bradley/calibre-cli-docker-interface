@@ -50,7 +50,7 @@ def batch_convert(
 @router.post("/batch/convert/dialog", response_class=HTMLResponse)
 def batch_convert_dialog(
     request: Request,
-    book_id: list[int] = Form(...),
+    book_id: list[int] = Form(default=[]),
     settings: Settings = Depends(get_settings),
 ):
     ids = _book_ids(book_id)

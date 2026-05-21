@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import tempfile
 from pathlib import Path
 
 from app.config import Settings
@@ -55,6 +56,57 @@ def _device_filename(settings: Settings, book) -> tuple[Path | None, str | None]
 # (Amazon-native AZW3/MOBI) and other readers (raw EPUB) both work without
 # on-the-fly conversion at send time.
 _AUTOCONVERT_TARGETS: tuple[str, ...] = ("AZW3", "MOBI", "EPUB")
+
+
+async def _upload_kindle_thumbnail(sent_file: Path, cover_src: Path) -> None:
+    """Generate and upload a Kindle sidecar thumbnail for a freshly-sent book.
+
+    No-ops (with a debug log) if the cover image is missing or the file's
+    EXTH 113/501 can't be read. Any MTP failure is logged at warning and
+    swallowed — the book is already on the device; failing to render a
+    library-tile cover is not a fatal error.
+    """
+    if not cover_src.is_file():
+        log.debug("no cover.jpg next to %s; skipping sidecar thumbnail", sent_file)
+        return
+    uuid, cdetype = await asyncio.to_thread(calibre_cli.read_mobi_identity, sent_file)
+    if not uuid or not cdetype:
+        log.debug("no EXTH uuid/cdetype in %s; skipping sidecar thumbnail", sent_file)
+        return
+    dest_name = calibre_cli.kindle_thumbnail_name(uuid, cdetype)
+
+    def _build(tmpdir: str) -> Path | None:
+        out = Path(tmpdir) / "thumb.jpg"
+        if not calibre_cli.make_kindle_thumbnail(cover_src, out):
+            return None
+        return out
+
+    tmpdir = tempfile.mkdtemp(prefix="cwc-thumb-")
+    try:
+        thumb_path = await asyncio.to_thread(_build, tmpdir)
+        if thumb_path is None:
+            return
+        try:
+            await mtp_helper.send_thumbnail(thumb_path, dest_name)
+        except mtp_helper.MTPHelperError as exc:
+            log.warning("kindle thumbnail upload failed for %s: %s", sent_file.name, exc)
+    finally:
+        await asyncio.to_thread(shutil.rmtree, tmpdir, ignore_errors=True)
+
+
+async def _remove_kindle_thumbnail(book_file: Path) -> None:
+    """Best-effort removal of the sidecar thumbnail for a book we just
+    deleted from the device. Reads the EXTH UUID/cdetype from the
+    library file. Silently skips MOBI-parse failures and MTP errors.
+    """
+    uuid, cdetype = await asyncio.to_thread(calibre_cli.read_mobi_identity, book_file)
+    if not uuid or not cdetype:
+        return
+    dest_name = calibre_cli.kindle_thumbnail_name(uuid, cdetype)
+    try:
+        await mtp_helper.remove_thumbnail(dest_name, ignore_missing=True)
+    except mtp_helper.MTPHelperError as exc:
+        log.warning("kindle thumbnail cleanup failed for %s: %s", book_file.name, exc)
 
 
 async def _autoconvert_all_formats(settings: Settings, book_id: int) -> list[str]:
@@ -225,6 +277,12 @@ def make_handlers(settings: Settings, device_state: DeviceState) -> dict[JobKind
                 device_state.on_device_filenames.add(send_src.name)
                 bp.state = "done"
                 bp.message = send_label
+                # The jailbroken-firmware Paperwhite can't extract cover
+                # thumbnails from Calibre-converted MOBIs/AZW3s at runtime;
+                # the library tile stays blank unless we upload the sidecar
+                # ourselves (matches what Calibre Desktop's KINDLE driver
+                # does). Best-effort: a failure here doesn't fail the send.
+                await _upload_kindle_thumbnail(send_src, src.parent / "cover.jpg")
             except mtp_helper.MTPHelperError as exc:
                 log.warning("send failed for book %s (%s): %s", bp.book_id, bp.title, exc)
                 bp.state = "failed"
@@ -268,6 +326,13 @@ def make_handlers(settings: Settings, device_state: DeviceState) -> dict[JobKind
                 log.warning("remove failed for book %s (%s): %s", bp.book_id, bp.title, exc)
                 bp.state = "failed"
                 bp.message = str(exc)
+                continue
+            # Best-effort: also clean up the sidecar thumbnail we uploaded
+            # for this book (if the library file is still around to read
+            # the EXTH UUID/cdetype from). An orphan thumbnail is harmless
+            # but tidy is tidy.
+            if src is not None:
+                await _remove_kindle_thumbnail(src)
         done = sum(1 for p in job.progress if p.state == "done")
         job.summary = f"removed {done} of {len(job.progress)}"
 

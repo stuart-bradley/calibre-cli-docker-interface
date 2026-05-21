@@ -48,10 +48,18 @@ def app(settings: Settings, monkeypatch):
     async def fake_remove(*a, **kw):
         return None
 
+    async def fake_send_thumbnail(*a, **kw):
+        return "system/thumbnails/stub"
+
+    async def fake_remove_thumbnail(*a, **kw):
+        return False
+
     monkeypatch.setattr(mtp_helper, "detect", fake_detect)
     monkeypatch.setattr(mtp_helper, "list_files", fake_list_files)
     monkeypatch.setattr(mtp_helper, "send", fake_send)
     monkeypatch.setattr(mtp_helper, "remove", fake_remove)
+    monkeypatch.setattr(mtp_helper, "send_thumbnail", fake_send_thumbnail)
+    monkeypatch.setattr(mtp_helper, "remove_thumbnail", fake_remove_thumbnail)
 
     from app.main import create_app
 

@@ -89,6 +89,12 @@ All 11 pass = ship it.
 - Kindle Paperwhite Signature Edition (USB ID `1949:9981`) — verified.
 - Any device libmtp recognises should work. If your device is rejected by `libmtp` it will not appear under `detect`.
 
+## Kindle library-tile covers
+
+On a stock Kindle the library tile cover is rendered from a JPEG that lives in `system/thumbnails/thumbnail_<UUID>_<CDE_TYPE>_portrait.jpg`, where the UUID and CDE type are EXTH records 113 and 501 inside the book. Calibre Desktop's KINDLE driver writes this file for every send; without it, the firmware's runtime cover extractor either fails outright (older / jailbroken firmwares) or leaves a 0-byte `.tmp.partial` sentinel that blocks future re-extraction.
+
+This project replicates that behaviour: every successful `send` also resizes the book's `cover.jpg` to 330×470, deletes any `.tmp.partial` sentinel for that UUID, and uploads the JPEG to `system/thumbnails/`. Every `remove` deletes the sidecar too. Both are best-effort — a thumbnail upload failure logs a warning but does not fail the send.
+
 ## Security
 
 - **Default**: no auth. Intended for trusted LAN deployment only.

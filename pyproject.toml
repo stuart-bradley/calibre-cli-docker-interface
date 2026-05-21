@@ -16,6 +16,7 @@ dependencies = [
     "jinja2>=3.1",
     "python-multipart>=0.0.12",
     "pydantic-settings>=2.6",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]

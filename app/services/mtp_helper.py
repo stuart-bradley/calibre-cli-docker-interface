@@ -81,6 +81,8 @@ _FILETYPE_UNKNOWN = 44
 # storages dynamically; if a future device exposes multiple, revisit.
 _DEFAULT_STORAGE_ID = 0x00010001
 _DOCUMENTS_FOLDER_NAME = "documents"
+_SYSTEM_FOLDER_NAME = "system"
+_THUMBNAILS_FOLDER_NAME = "thumbnails"
 
 # Sentinel ``parent_id`` for ``LIBMTP_Get_Files_And_Folders`` meaning "root
 # of storage". libmtp accepts this value where the PTP wire-protocol uses
@@ -265,29 +267,49 @@ def _open_device() -> Iterator[tuple[c_void_p, str, str, str]]:
         _libc.free(raw_ptr)
 
 
-def _find_documents_folder_id(dev: c_void_p) -> int | None:
-    """Walk the top-level folders and return the id of ``documents``.
+def _find_folder_id(dev: c_void_p, parent_id: int, name: str) -> int | None:
+    """Return the id of the first folder named ``name`` under ``parent_id``.
 
-    The id varies between devices (and after a factory reset), so we resolve
-    it on every call rather than caching.
+    Case-insensitive match. The MTP folder ids vary between devices (and
+    after a factory reset), so callers resolve on every operation rather
+    than caching.
     """
     assert _libmtp is not None
     head = _libmtp.LIBMTP_Get_Files_And_Folders(
-        dev, _DEFAULT_STORAGE_ID, c_uint32(_MTP_PARENT_ROOT)
+        dev, _DEFAULT_STORAGE_ID, c_uint32(parent_id)
     )
     try:
         node_ptr = head
         while node_ptr:
             node = node_ptr.contents
             if node.filetype == _FILETYPE_FOLDER:
-                name = (node.filename or b"").decode(errors="replace")
-                if name.lower() == _DOCUMENTS_FOLDER_NAME:
+                fname = (node.filename or b"").decode(errors="replace")
+                if fname.lower() == name.lower():
                     return int(node.item_id)
             node_ptr = node.next
         return None
     finally:
         if head:
             _libmtp.LIBMTP_destroy_file_t(head)
+
+
+def _find_documents_folder_id(dev: c_void_p) -> int | None:
+    return _find_folder_id(dev, _MTP_PARENT_ROOT, _DOCUMENTS_FOLDER_NAME)
+
+
+def _find_thumbnails_folder_id(dev: c_void_p) -> int | None:
+    """Walk root → ``system`` → ``thumbnails``.
+
+    This is the folder the Kindle firmware reads to render library tile
+    covers (see kindle-cover-investigation memory). Calibre Desktop's
+    KINDLE driver writes ``thumbnail_<UUID>_<CDE_TYPE>_portrait.jpg`` here
+    after each book send; without it, sideloaded books show a blank tile
+    on this jailbroken-firmware Paperwhite Signature Edition.
+    """
+    sys_id = _find_folder_id(dev, _MTP_PARENT_ROOT, _SYSTEM_FOLDER_NAME)
+    if sys_id is None:
+        return None
+    return _find_folder_id(dev, sys_id, _THUMBNAILS_FOLDER_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +404,104 @@ def _remove_blocking(dest_name: str) -> None:
             raise MTPHelperError(f"LIBMTP_Delete_Object returned {ret} for {dest_name!r}")
 
 
+def _send_thumbnail_blocking(local_path: str, dest_name: str) -> str:
+    """Upload a sidecar thumbnail JPEG to ``system/thumbnails/``.
+
+    Before uploading the new file, any pre-existing entry with the same
+    canonical name OR the firmware's ``.tmp.partial`` sentinel for the
+    same UUID is deleted. The sentinel is a 0-byte file the firmware
+    creates when it tries and fails to extract a thumbnail from a
+    sideloaded MOBI — without removing it, the firmware ignores
+    subsequent attempts to render a cover for that book.
+    """
+    if not os.path.isfile(local_path):
+        raise MTPHelperError(f"local file does not exist: {local_path!r}")
+    with _open_device() as (dev, _vid, _pid, _name):
+        assert _libmtp is not None
+        thumb_folder_id = _find_thumbnails_folder_id(dev)
+        if thumb_folder_id is None:
+            raise MTPHelperError("device has no 'system/thumbnails' folder")
+        partial_name = f"{dest_name}.tmp.partial"
+        head = _libmtp.LIBMTP_Get_Files_And_Folders(
+            dev, _DEFAULT_STORAGE_ID, c_uint32(thumb_folder_id)
+        )
+        try:
+            node_ptr = head
+            while node_ptr:
+                node = node_ptr.contents
+                if node.filetype != _FILETYPE_FOLDER:
+                    name = (node.filename or b"").decode(errors="replace")
+                    if name in (dest_name, partial_name):
+                        ret = _libmtp.LIBMTP_Delete_Object(dev, c_uint32(int(node.item_id)))
+                        if ret != 0:
+                            _libmtp.LIBMTP_Clear_Errorstack(dev)
+                node_ptr = node.next
+        finally:
+            if head:
+                _libmtp.LIBMTP_destroy_file_t(head)
+        size = os.path.getsize(local_path)
+        f = _LibMTPFile()
+        f.item_id = 0
+        f.parent_id = thumb_folder_id
+        f.storage_id = _DEFAULT_STORAGE_ID
+        f.filename = dest_name.encode()
+        f.filesize = size
+        f.modificationdate = 0
+        f.filetype = _FILETYPE_UNKNOWN
+        f.next = POINTER(_LibMTPFile)()
+        ret = _libmtp.LIBMTP_Send_File_From_File(dev, local_path.encode(), byref(f), None, None)
+        if ret != 0:
+            _libmtp.LIBMTP_Clear_Errorstack(dev)
+            raise MTPHelperError(f"LIBMTP_Send_File_From_File returned {ret}")
+        if f.item_id == 0:
+            raise MTPHelperError("thumbnail send returned success but no item_id was assigned")
+        return f"system/thumbnails/{dest_name}"
+
+
+def _remove_thumbnail_blocking(dest_name: str, *, ignore_missing: bool) -> bool:
+    """Delete a thumbnail and its ``.tmp.partial`` sibling, if either exists.
+
+    Returns ``True`` if at least one object was deleted. With
+    ``ignore_missing=False`` raises if neither file is found.
+    """
+    with _open_device() as (dev, _vid, _pid, _name):
+        assert _libmtp is not None
+        thumb_folder_id = _find_thumbnails_folder_id(dev)
+        if thumb_folder_id is None:
+            if ignore_missing:
+                return False
+            raise MTPHelperError("device has no 'system/thumbnails' folder")
+        partial_name = f"{dest_name}.tmp.partial"
+        head = _libmtp.LIBMTP_Get_Files_And_Folders(
+            dev, _DEFAULT_STORAGE_ID, c_uint32(thumb_folder_id)
+        )
+        targets: list[tuple[int, str]] = []
+        try:
+            node_ptr = head
+            while node_ptr:
+                node = node_ptr.contents
+                if node.filetype != _FILETYPE_FOLDER:
+                    name = (node.filename or b"").decode(errors="replace")
+                    if name in (dest_name, partial_name):
+                        targets.append((int(node.item_id), name))
+                node_ptr = node.next
+        finally:
+            if head:
+                _libmtp.LIBMTP_destroy_file_t(head)
+        if not targets:
+            if ignore_missing:
+                return False
+            raise MTPHelperError(f"system/thumbnails/{dest_name} not found on device")
+        deleted_any = False
+        for iid, _name in targets:
+            ret = _libmtp.LIBMTP_Delete_Object(dev, c_uint32(iid))
+            if ret == 0:
+                deleted_any = True
+            else:
+                _libmtp.LIBMTP_Clear_Errorstack(dev)
+        return deleted_any
+
+
 # ---------------------------------------------------------------------------
 # Async API
 # ---------------------------------------------------------------------------
@@ -407,3 +527,27 @@ async def send(local_path: Path, dest_name: str) -> str:
 async def remove(dest_name: str) -> None:
     async with _lock:
         await asyncio.to_thread(_remove_blocking, dest_name)
+
+
+async def send_thumbnail(local_path: Path, dest_name: str) -> str:
+    """Upload ``local_path`` to ``system/thumbnails/<dest_name>``.
+
+    ``dest_name`` is the canonical sidecar name — typically
+    ``thumbnail_<UUID>_<CDE_TYPE>_portrait.jpg``. Any existing entry with
+    the same name, or the firmware's ``.tmp.partial`` sentinel for that
+    UUID, is deleted first.
+    """
+    async with _lock:
+        return await asyncio.to_thread(_send_thumbnail_blocking, str(local_path), dest_name)
+
+
+async def remove_thumbnail(dest_name: str, *, ignore_missing: bool = True) -> bool:
+    """Delete ``system/thumbnails/<dest_name>`` and its ``.tmp.partial``.
+
+    Returns ``True`` if anything was deleted. ``ignore_missing`` controls
+    whether a missing target is silently ignored (default) or raised.
+    """
+    async with _lock:
+        return await asyncio.to_thread(
+            _remove_thumbnail_blocking, dest_name, ignore_missing=ignore_missing
+        )

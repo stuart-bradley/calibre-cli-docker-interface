@@ -126,6 +126,61 @@ async def test_remove_propagates_error(monkeypatch):
         await mtp_helper.remove("X.epub")
 
 
+# --- send_thumbnail / remove_thumbnail -----------------------------------------
+
+
+async def test_send_thumbnail_ok(monkeypatch):
+    seen: list[tuple[str, str]] = []
+
+    def fake_blocking(local: str, dest: str) -> str:
+        seen.append((local, dest))
+        return f"system/thumbnails/{dest}"
+
+    monkeypatch.setattr(mtp_helper, "_send_thumbnail_blocking", fake_blocking)
+
+    dest = await mtp_helper.send_thumbnail(
+        Path("/tmp/t.jpg"), "thumbnail_u_EBOK_portrait.jpg"
+    )
+
+    assert dest == "system/thumbnails/thumbnail_u_EBOK_portrait.jpg"
+    assert seen == [("/tmp/t.jpg", "thumbnail_u_EBOK_portrait.jpg")]
+
+
+async def test_send_thumbnail_propagates_error(monkeypatch):
+    def fake_blocking(local: str, dest: str) -> str:
+        raise mtp_helper.MTPHelperError("device has no 'system/thumbnails' folder")
+
+    monkeypatch.setattr(mtp_helper, "_send_thumbnail_blocking", fake_blocking)
+
+    with pytest.raises(mtp_helper.MTPHelperError, match="thumbnails"):
+        await mtp_helper.send_thumbnail(Path("/tmp/t.jpg"), "thumbnail_x.jpg")
+
+
+async def test_remove_thumbnail_default_ignores_missing(monkeypatch):
+    seen: list[tuple[str, bool]] = []
+
+    def fake_blocking(dest: str, *, ignore_missing: bool) -> bool:
+        seen.append((dest, ignore_missing))
+        return False
+
+    monkeypatch.setattr(mtp_helper, "_remove_thumbnail_blocking", fake_blocking)
+
+    deleted = await mtp_helper.remove_thumbnail("thumbnail_x.jpg")
+
+    assert deleted is False
+    assert seen == [("thumbnail_x.jpg", True)]
+
+
+async def test_remove_thumbnail_can_raise_when_required(monkeypatch):
+    def fake_blocking(dest: str, *, ignore_missing: bool) -> bool:
+        raise mtp_helper.MTPHelperError("not found")
+
+    monkeypatch.setattr(mtp_helper, "_remove_thumbnail_blocking", fake_blocking)
+
+    with pytest.raises(mtp_helper.MTPHelperError, match="not found"):
+        await mtp_helper.remove_thumbnail("thumbnail_x.jpg", ignore_missing=False)
+
+
 # --- lock guard ------------------------------------------------------------
 
 

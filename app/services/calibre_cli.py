@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -327,6 +328,98 @@ def _sibling_cover(src: Path) -> Path | None:
     cover into its metadata (and onto the Kindle library tile)."""
     candidate = src.parent / "cover.jpg"
     return candidate if candidate.is_file() else None
+
+
+# EXTH record types we read for Kindle sidecar thumbnails. 113 is the
+# book UUID, 501 is the CDE content type (typically "EBOK" for ebooks).
+# The Kindle firmware combines them into the on-device thumbnail filename.
+_EXTH_TYPE_UUID = 113
+_EXTH_TYPE_CDETYPE = 501
+
+# Kindle library-tile thumbnail dimensions. Matches Calibre Desktop's
+# KINDLE driver default and keeps file size comfortably under the
+# ~70KB working examples already on the device.
+KINDLE_THUMB_SIZE = (330, 470)
+
+
+def read_mobi_identity(path: Path) -> tuple[str | None, str | None]:
+    """Read the UUID (EXTH 113) and CDE content type (EXTH 501) from a
+    MOBI or AZW3 file. Returns ``(None, None)`` for non-MOBI files or any
+    parse error — callers should treat that as "no sidecar possible" and
+    skip thumbnail upload rather than fail the send.
+
+    AZW3 is a MOBI variant (KF8) and uses the same PalmDB/EXTH layout, so
+    one parser handles both.
+    """
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None, None
+    if len(data) < 82 or data[60:68] != b"BOOKMOBI":
+        return None, None
+    rec0 = struct.unpack(">I", data[78:82])[0]
+    # Record 0 starts with a 16-byte PalmDOC text header, then the MOBI
+    # header beginning with the ``MOBI`` signature.
+    mobi_off = rec0 + 16
+    if data[mobi_off : mobi_off + 4] != b"MOBI":
+        return None, None
+    mobi_header_len = struct.unpack(">I", data[mobi_off + 4 : mobi_off + 8])[0]
+    exth_flag = struct.unpack(">I", data[mobi_off + 0x70 : mobi_off + 0x74])[0]
+    if not (exth_flag & 0x40):
+        return None, None
+    exth_off = mobi_off + mobi_header_len
+    if data[exth_off : exth_off + 4] != b"EXTH":
+        return None, None
+    count = struct.unpack(">I", data[exth_off + 8 : exth_off + 12])[0]
+    p = exth_off + 12
+    uuid = cdetype = None
+    for _ in range(count):
+        if p + 8 > len(data):
+            break
+        rtype, rlen = struct.unpack(">II", data[p : p + 8])
+        if rlen < 8 or p + rlen > len(data):
+            break
+        body = data[p + 8 : p + rlen]
+        if rtype == _EXTH_TYPE_UUID:
+            uuid = body.decode(errors="replace").strip("\x00").strip() or None
+        elif rtype == _EXTH_TYPE_CDETYPE:
+            cdetype = body.decode(errors="replace").strip("\x00").strip() or None
+        p += rlen
+    return uuid, cdetype
+
+
+def kindle_thumbnail_name(uuid: str, cdetype: str) -> str:
+    """The sidecar filename the Kindle firmware looks for in
+    ``system/thumbnails/`` to render a book's library tile cover."""
+    return f"thumbnail_{uuid}_{cdetype}_portrait.jpg"
+
+
+def make_kindle_thumbnail(
+    cover_src: Path, dest_path: Path, *, size: tuple[int, int] = KINDLE_THUMB_SIZE
+) -> bool:
+    """Resize ``cover_src`` to ``size`` and write a JPEG to ``dest_path``.
+
+    Returns ``True`` on success. Failures (missing source, bad image data,
+    encode error) are logged at warning level and return ``False`` — the
+    caller's job is too important to fail just because a tile cover can't
+    be generated.
+    """
+    try:
+        from PIL import Image, UnidentifiedImageError
+    except ImportError:
+        log.warning("Pillow not installed; cannot generate Kindle sidecar thumbnail")
+        return False
+    try:
+        with Image.open(cover_src) as im:
+            im.load()
+            im = im.convert("RGB")
+            im = im.resize(size, Image.LANCZOS)
+            im.save(dest_path, "JPEG", quality=85)
+    except (OSError, UnidentifiedImageError, ValueError) as exc:
+        log.warning("thumbnail generation failed for %s: %s", cover_src, exc)
+        return False
+    return True
 
 
 def convert_to_temp_file(src: Path, target_fmt: str) -> Path | None:

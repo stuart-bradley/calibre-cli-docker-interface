@@ -88,6 +88,21 @@ docker exec calibre-web-cli calibredb --library-path /books list
 docker exec calibre-web-cli calibredb --library-path /books check_library
 ```
 
+## Kindle library tile shows no cover for sideloaded books
+
+The Kindle firmware does not render the cover embedded in a sideloaded MOBI / AZW3 directly. It looks for a sidecar JPEG at `system/thumbnails/thumbnail_<UUID>_<CDE_TYPE>_portrait.jpg` where the UUID is EXTH 113 and CDE type is EXTH 501 (almost always `EBOK`). This app uploads that sidecar automatically on every send.
+
+If a tile is still blank after a send:
+
+1. Make sure the library directory has a `cover.jpg` next to the book file. Without it, no sidecar is generated. Re-fetch metadata (with "fetch covers" enabled) or drop a `cover.jpg` in by hand.
+2. Confirm the source format is MOBI or AZW3 — the EXTH parser only knows those. EPUBs are converted to AZW3 at send time so they get sidecars too.
+3. On older jailbroken firmwares the Kindle indexer leaves a 0-byte `thumbnail_<UUID>_<CDE>_portrait.jpg.tmp.partial` sentinel when it fails to render a tile. Our send path deletes any pre-existing sentinel before uploading the real thumb, so this should self-heal on next send.
+4. To inspect what's actually on the device, attach the Kindle and walk MTP root → `system` → `thumbnails`:
+   ```bash
+   docker exec calibre-web-cli calibre-debug -e /app/app/services/mtp_helper.py detect
+   ```
+   then read the helper source for the folder-walk routines.
+
 ## `restore_database` fails with `FileNotFoundError: '/books/.calnotes'`
 
 This is an upstream Calibre quirk — `restore_database` walks the library and

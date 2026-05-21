@@ -158,8 +158,8 @@ def _ensure_init() -> None:
         ]
         libmtp.LIBMTP_Detect_Raw_Devices.restype = c_int
 
-        libmtp.LIBMTP_Open_Raw_Device_Uncached.argtypes = [POINTER(_LibMTPRawDevice)]
-        libmtp.LIBMTP_Open_Raw_Device_Uncached.restype = c_void_p
+        libmtp.LIBMTP_Open_Raw_Device.argtypes = [POINTER(_LibMTPRawDevice)]
+        libmtp.LIBMTP_Open_Raw_Device.restype = c_void_p
 
         libmtp.LIBMTP_Release_Device.argtypes = [c_void_p]
         libmtp.LIBMTP_Release_Device.restype = None
@@ -232,13 +232,11 @@ def _open_device() -> Iterator[tuple[c_void_p, str, str, str]]:
     the raw-device list freed on exit. Raises ``MTPHelperError`` if no device
     matches the filter, libmtp errors out, or the open returns NULL.
 
-    Open semantics: ``LIBMTP_Open_Raw_Device_Uncached`` is used so we don't
-    populate libmtp's internal filesystem cache — we query folders/files
-    explicitly via ``LIBMTP_Get_Folder_List`` and
-    ``LIBMTP_Get_Files_And_Folders`` instead. The cached open touches more
-    of the device tree on connect and was observed (via Calibre's wrapper)
-    to leave the device in a state where ``put_file`` returned success but
-    the bytes did not transfer.
+    Open semantics: ``LIBMTP_Open_Raw_Device`` (the cached open) is used
+    because ``LIBMTP_Get_Folder_List`` returns an empty list against the
+    uncached handle on this firmware. The cache is what backs the folder
+    enumeration; without it folder lookup silently returns no results
+    (verified on-device: cached → 7 top-level folders, uncached → 0).
     """
     _ensure_init()
     assert _libmtp is not None and _libc is not None
@@ -264,9 +262,9 @@ def _open_device() -> Iterator[tuple[c_void_p, str, str, str]]:
         if chosen is None:
             raise MTPHelperError(f"no MTP device matched USB ID filter {sorted(wanted)!r}")
         idx, vid, pid = chosen
-        dev = _libmtp.LIBMTP_Open_Raw_Device_Uncached(byref(raw_ptr[idx]))
+        dev = _libmtp.LIBMTP_Open_Raw_Device(byref(raw_ptr[idx]))
         if not dev:
-            raise MTPHelperError(f"LIBMTP_Open_Raw_Device_Uncached returned NULL for {vid}:{pid}")
+            raise MTPHelperError(f"LIBMTP_Open_Raw_Device returned NULL for {vid}:{pid}")
         try:
             manuf = _libmtp.LIBMTP_Get_Manufacturername(dev) or b""
             model = _libmtp.LIBMTP_Get_Modelname(dev) or b""

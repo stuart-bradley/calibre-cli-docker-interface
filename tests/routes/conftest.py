@@ -7,6 +7,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from app.config import Settings, get_settings
+from tests.fakes.mtp import FakeMtpBackend
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 SOURCE_LIBRARY = FIXTURE_DIR / "library_minimal"
@@ -32,35 +33,28 @@ def settings(library: Path, tmp_path: Path, monkeypatch) -> Settings:
 
 
 @pytest.fixture
-def app(settings: Settings, monkeypatch):
-    # Stub MTP helper so route tests don't try to spawn calibre-debug.
+def fake_mtp_backend(monkeypatch):
+    """An in-memory MTP backend installed for the test.
+
+    A single device is pre-populated with the canonical ``documents/`` and
+    ``system/thumbnails/`` folders so handler-stack tests can exercise real
+    sends/removes/thumbnail uploads without per-test setup. Tests that need
+    extra state (preexisting files on the device, multiple devices, failure
+    injection) reach into this fixture directly.
+    """
+    backend = FakeMtpBackend()
+    device = backend.add_device()
+    device.ensure_documents()
+    device.ensure_system_thumbnails()
+
     from app.services import mtp_helper
 
-    async def fake_detect(**kw):
-        return mtp_helper.DetectResult(connected=False, device=None)
+    monkeypatch.setattr(mtp_helper, "_backend", backend)
+    return backend
 
-    async def fake_list_files(**kw):
-        return []
 
-    async def fake_send(*a, **kw):
-        return "documents/stub"
-
-    async def fake_remove(*a, **kw):
-        return None
-
-    async def fake_send_thumbnail(*a, **kw):
-        return "system/thumbnails/stub"
-
-    async def fake_remove_thumbnail(*a, **kw):
-        return False
-
-    monkeypatch.setattr(mtp_helper, "detect", fake_detect)
-    monkeypatch.setattr(mtp_helper, "list_files", fake_list_files)
-    monkeypatch.setattr(mtp_helper, "send", fake_send)
-    monkeypatch.setattr(mtp_helper, "remove", fake_remove)
-    monkeypatch.setattr(mtp_helper, "send_thumbnail", fake_send_thumbnail)
-    monkeypatch.setattr(mtp_helper, "remove_thumbnail", fake_remove_thumbnail)
-
+@pytest.fixture
+def app(settings: Settings, fake_mtp_backend):
     from app.main import create_app
 
     return create_app(settings)

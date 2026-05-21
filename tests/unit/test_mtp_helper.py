@@ -6,37 +6,52 @@ from pathlib import Path
 import pytest
 
 from app.services import mtp_helper
+from tests.fakes.mtp import FakeMtpBackend
 
 # ---------------------------------------------------------------------------
-# Async API — monkeypatches the per-verb blocking functions. The libmtp
-# ctypes layer itself is not unit-tested; correctness there is verified
-# on the device via the deploy + manual UI send.
+# Shared fixtures
 # ---------------------------------------------------------------------------
 
 
-# --- detect ----------------------------------------------------------------
+@pytest.fixture
+def backend(monkeypatch):
+    """A FakeMtpBackend installed into mtp_helper for the duration of the test.
+    No device is added by default; tests opt in via ``backend.add_device(...)``
+    so the empty-bus / no-match paths are also reachable."""
+    fake = FakeMtpBackend()
+    monkeypatch.setattr(mtp_helper, "_backend", fake)
+    return fake
 
 
-async def test_detect_connected(monkeypatch):
-    def fake_detect_blocking() -> mtp_helper.DetectResult:
-        return mtp_helper.DetectResult(
-            connected=True,
-            device=mtp_helper.Device(name="Amazon Kindle", vid="1949", pid="9981"),
-        )
+@pytest.fixture
+def local_book(tmp_path: Path) -> Path:
+    """A tiny on-disk file standing in for a book or thumbnail. ``send_file``
+    on both the real and fake backends reads its size via ``os.path.getsize``,
+    so the file has to actually exist on the host."""
+    p = tmp_path / "book.azw3"
+    p.write_bytes(b"AZW3-payload")
+    return p
 
-    monkeypatch.setattr(mtp_helper, "_detect_blocking", fake_detect_blocking)
+
+# ---------------------------------------------------------------------------
+# detect
+# ---------------------------------------------------------------------------
+
+
+async def test_detect_returns_friendly_name_from_backend(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    backend.add_device(manufacturer="Amazon", model="Kindle")
 
     result = await mtp_helper.detect()
 
     assert result.connected is True
-    assert result.device == mtp_helper.Device(name="Amazon Kindle", vid="1949", pid="9981")
+    assert result.device is not None
+    assert result.device.name == "Amazon Kindle"
+    assert (result.device.vid, result.device.pid) == ("1949", "9981")
 
 
-async def test_detect_disconnected(monkeypatch):
-    def fake_detect_blocking() -> mtp_helper.DetectResult:
-        return mtp_helper.DetectResult(connected=False, device=None)
-
-    monkeypatch.setattr(mtp_helper, "_detect_blocking", fake_detect_blocking)
+async def test_detect_returns_disconnected_when_no_devices(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
 
     result = await mtp_helper.detect()
 
@@ -44,197 +59,321 @@ async def test_detect_disconnected(monkeypatch):
     assert result.device is None
 
 
-# --- list ------------------------------------------------------------------
+async def test_detect_filters_by_usb_id(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "1949:9981")
+    backend.add_device(vid=0x0BDA, pid=0x9210, manufacturer="Realtek", model="Decoy")
+    backend.add_device(vid=0x1949, pid=0x9981, manufacturer="Amazon", model="Kindle")
+
+    result = await mtp_helper.detect()
+
+    assert result.connected is True
+    assert result.device is not None
+    assert result.device.vid == "1949"
 
 
-async def test_list_files_ok(monkeypatch):
-    def fake_list_blocking() -> list[mtp_helper.FileEntry]:
-        return [
-            mtp_helper.FileEntry(path="documents/A.epub", size=111),
-            mtp_helper.FileEntry(path="documents/B.epub", size=222),
-        ]
+async def test_detect_returns_disconnected_when_no_filter_match(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "1949:9981")
+    backend.add_device(vid=0x0BDA, pid=0x9210)
 
-    monkeypatch.setattr(mtp_helper, "_list_blocking", fake_list_blocking)
+    result = await mtp_helper.detect()
+
+    assert result.connected is False
+
+
+# ---------------------------------------------------------------------------
+# list_files
+# ---------------------------------------------------------------------------
+
+
+async def test_list_files_returns_documents_contents(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    docs = dev.ensure_documents()
+    dev.add_file(docs, "alpha.azw3", size=111)
+    dev.add_file(docs, "beta.mobi", size=222)
 
     files = await mtp_helper.list_files()
 
-    assert [f.path for f in files] == ["documents/A.epub", "documents/B.epub"]
-    assert files[0].size == 111
+    paths = sorted(f.path for f in files)
+    assert paths == ["documents/alpha.azw3", "documents/beta.mobi"]
+    by_path = {f.path: f.size for f in files}
+    assert by_path["documents/alpha.azw3"] == 111
+    assert by_path["documents/beta.mobi"] == 222
 
 
-async def test_list_files_propagates_error(monkeypatch):
-    def fake_list_blocking() -> list[mtp_helper.FileEntry]:
-        raise mtp_helper.MTPHelperError("no MTP devices found")
+async def test_list_files_excludes_folders(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    docs = dev.ensure_documents()
+    dev.add_file(docs, "real.azw3", size=10)
+    dev.add_folder(docs, "subdir")
 
-    monkeypatch.setattr(mtp_helper, "_list_blocking", fake_list_blocking)
+    files = await mtp_helper.list_files()
+
+    assert [f.path for f in files] == ["documents/real.azw3"]
+
+
+async def test_list_files_returns_empty_when_no_documents_folder(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    backend.add_device()  # device present but root is empty
+
+    files = await mtp_helper.list_files()
+
+    assert files == []
+
+
+async def test_list_files_raises_when_no_device(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
 
     with pytest.raises(mtp_helper.MTPHelperError, match="no MTP devices found"):
         await mtp_helper.list_files()
 
 
-# --- send ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# send
+# ---------------------------------------------------------------------------
 
 
-async def test_send_ok(monkeypatch):
-    seen: list[tuple[str, str]] = []
+async def test_send_writes_into_documents_folder(backend, monkeypatch, local_book):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    docs = dev.ensure_documents()
 
-    def fake_send_blocking(local: str, dest: str) -> str:
-        seen.append((local, dest))
-        return f"documents/{dest}"
+    dest = await mtp_helper.send(local_book, "alpha.azw3")
 
-    monkeypatch.setattr(mtp_helper, "_send_blocking", fake_send_blocking)
-
-    dest = await mtp_helper.send(Path("/tmp/local.epub"), "X.epub")
-
-    assert dest == "documents/X.epub"
-    assert seen == [("/tmp/local.epub", "X.epub")]
+    assert dest == "documents/alpha.azw3"
+    assert dev.find_by_name(docs, "alpha.azw3") is not None
+    item_id = dev.find_by_name(docs, "alpha.azw3")
+    assert dev.nodes[item_id].filesize == len(b"AZW3-payload")
+    assert backend.sent_files == [(str(local_book), "alpha.azw3")]
 
 
-async def test_send_propagates_error(monkeypatch):
-    def fake_send_blocking(local: str, dest: str) -> str:
-        raise mtp_helper.MTPHelperError("device has no 'documents' folder")
-
-    monkeypatch.setattr(mtp_helper, "_send_blocking", fake_send_blocking)
+async def test_send_raises_when_no_documents_folder(backend, monkeypatch, local_book):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    backend.add_device()
 
     with pytest.raises(mtp_helper.MTPHelperError, match="documents"):
-        await mtp_helper.send(Path("/tmp/local.epub"), "X.epub")
+        await mtp_helper.send(local_book, "alpha.azw3")
 
 
-# --- remove ----------------------------------------------------------------
+async def test_send_raises_when_local_file_missing(backend, monkeypatch, tmp_path):
+    """Missing-file check happens before any device access, so this works
+    even with no device on the bus — the cold-start regression test."""
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    missing = tmp_path / "definitely-not-here.azw3"
+
+    with pytest.raises(mtp_helper.MTPHelperError, match="local file does not exist"):
+        await mtp_helper.send(missing, "alpha.azw3")
 
 
-async def test_remove_ok(monkeypatch):
-    seen: list[str] = []
+async def test_send_propagates_backend_failure(backend, monkeypatch, local_book):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    dev.ensure_documents()
+    backend.fail_next_send = "device storage full"
 
-    def fake_remove_blocking(dest: str) -> None:
-        seen.append(dest)
-
-    monkeypatch.setattr(mtp_helper, "_remove_blocking", fake_remove_blocking)
-
-    await mtp_helper.remove("X.epub")
-
-    assert seen == ["X.epub"]
+    with pytest.raises(mtp_helper.MTPHelperError, match="device storage full"):
+        await mtp_helper.send(local_book, "alpha.azw3")
 
 
-async def test_remove_propagates_error(monkeypatch):
-    def fake_remove_blocking(dest: str) -> None:
-        raise mtp_helper.MTPHelperError("documents/X.epub not found on device")
+# ---------------------------------------------------------------------------
+# remove
+# ---------------------------------------------------------------------------
 
-    monkeypatch.setattr(mtp_helper, "_remove_blocking", fake_remove_blocking)
+
+async def test_remove_deletes_by_name(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    docs = dev.ensure_documents()
+    iid = dev.add_file(docs, "bar.mobi", size=42)
+
+    await mtp_helper.remove("bar.mobi")
+
+    assert iid not in dev.nodes
+    assert dev.find_by_name(docs, "bar.mobi") is None
+
+
+async def test_remove_raises_when_missing(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    dev.ensure_documents()
 
     with pytest.raises(mtp_helper.MTPHelperError, match="not found"):
-        await mtp_helper.remove("X.epub")
+        await mtp_helper.remove("bar.mobi")
 
 
-# --- send_thumbnail / remove_thumbnail -----------------------------------------
+async def test_remove_raises_when_no_documents_folder(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    backend.add_device()
+
+    with pytest.raises(mtp_helper.MTPHelperError, match="documents"):
+        await mtp_helper.remove("bar.mobi")
 
 
-async def test_send_thumbnail_ok(monkeypatch):
-    seen: list[tuple[str, str]] = []
+# ---------------------------------------------------------------------------
+# send_thumbnail
+# ---------------------------------------------------------------------------
 
-    def fake_blocking(local: str, dest: str) -> str:
-        seen.append((local, dest))
-        return f"system/thumbnails/{dest}"
 
-    monkeypatch.setattr(mtp_helper, "_send_thumbnail_blocking", fake_blocking)
+async def test_send_thumbnail_writes_into_system_thumbnails(
+    backend, monkeypatch, local_book
+):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    thumbs = dev.ensure_system_thumbnails()
 
-    dest = await mtp_helper.send_thumbnail(
-        Path("/tmp/t.jpg"), "thumbnail_u_EBOK_portrait.jpg"
+    dest = await mtp_helper.send_thumbnail(local_book, "thumbnail_X_EBOK_portrait.jpg")
+
+    assert dest == "system/thumbnails/thumbnail_X_EBOK_portrait.jpg"
+    assert dev.find_by_name(thumbs, "thumbnail_X_EBOK_portrait.jpg") is not None
+
+
+async def test_send_thumbnail_cleans_up_partial_sentinel(
+    backend, monkeypatch, local_book
+):
+    """The firmware leaves a 0-byte ``.tmp.partial`` when its own cover
+    extractor fails. Until it's removed, the device ignores subsequent
+    thumbnail uploads for that UUID. Our send path must wipe it first."""
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    thumbs = dev.ensure_system_thumbnails()
+    sentinel_id = dev.add_file(
+        thumbs, "thumbnail_X_EBOK_portrait.jpg.tmp.partial", size=0
     )
 
-    assert dest == "system/thumbnails/thumbnail_u_EBOK_portrait.jpg"
-    assert seen == [("/tmp/t.jpg", "thumbnail_u_EBOK_portrait.jpg")]
+    await mtp_helper.send_thumbnail(local_book, "thumbnail_X_EBOK_portrait.jpg")
+
+    assert sentinel_id not in dev.nodes
+    assert dev.find_by_name(thumbs, "thumbnail_X_EBOK_portrait.jpg.tmp.partial") is None
+    assert dev.find_by_name(thumbs, "thumbnail_X_EBOK_portrait.jpg") is not None
 
 
-async def test_send_thumbnail_propagates_error(monkeypatch):
-    def fake_blocking(local: str, dest: str) -> str:
-        raise mtp_helper.MTPHelperError("device has no 'system/thumbnails' folder")
+async def test_send_thumbnail_overwrites_existing(backend, monkeypatch, local_book):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    thumbs = dev.ensure_system_thumbnails()
+    old_id = dev.add_file(thumbs, "thumbnail_X_EBOK_portrait.jpg", size=999)
 
-    monkeypatch.setattr(mtp_helper, "_send_thumbnail_blocking", fake_blocking)
+    await mtp_helper.send_thumbnail(local_book, "thumbnail_X_EBOK_portrait.jpg")
+
+    assert old_id not in dev.nodes
+    new_id = dev.find_by_name(thumbs, "thumbnail_X_EBOK_portrait.jpg")
+    assert new_id is not None
+    assert dev.nodes[new_id].filesize == len(b"AZW3-payload")
+
+
+async def test_send_thumbnail_raises_when_thumbnails_folder_missing(
+    backend, monkeypatch, local_book
+):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    backend.add_device()
 
     with pytest.raises(mtp_helper.MTPHelperError, match="thumbnails"):
-        await mtp_helper.send_thumbnail(Path("/tmp/t.jpg"), "thumbnail_x.jpg")
+        await mtp_helper.send_thumbnail(local_book, "thumbnail_X.jpg")
 
 
-async def test_remove_thumbnail_default_ignores_missing(monkeypatch):
-    seen: list[tuple[str, bool]] = []
+# ---------------------------------------------------------------------------
+# remove_thumbnail
+# ---------------------------------------------------------------------------
 
-    def fake_blocking(dest: str, *, ignore_missing: bool) -> bool:
-        seen.append((dest, ignore_missing))
-        return False
 
-    monkeypatch.setattr(mtp_helper, "_remove_thumbnail_blocking", fake_blocking)
+async def test_remove_thumbnail_removes_canonical_and_partial(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    thumbs = dev.ensure_system_thumbnails()
+    canonical_id = dev.add_file(thumbs, "thumbnail_X_EBOK_portrait.jpg", size=1)
+    partial_id = dev.add_file(
+        thumbs, "thumbnail_X_EBOK_portrait.jpg.tmp.partial", size=0
+    )
 
-    deleted = await mtp_helper.remove_thumbnail("thumbnail_x.jpg")
+    deleted = await mtp_helper.remove_thumbnail("thumbnail_X_EBOK_portrait.jpg")
+
+    assert deleted is True
+    assert canonical_id not in dev.nodes
+    assert partial_id not in dev.nodes
+
+
+async def test_remove_thumbnail_returns_false_when_missing_with_ignore_missing(
+    backend, monkeypatch
+):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    dev.ensure_system_thumbnails()
+
+    deleted = await mtp_helper.remove_thumbnail("thumbnail_X_EBOK_portrait.jpg")
 
     assert deleted is False
-    assert seen == [("thumbnail_x.jpg", True)]
 
 
-async def test_remove_thumbnail_can_raise_when_required(monkeypatch):
-    def fake_blocking(dest: str, *, ignore_missing: bool) -> bool:
-        raise mtp_helper.MTPHelperError("not found")
-
-    monkeypatch.setattr(mtp_helper, "_remove_thumbnail_blocking", fake_blocking)
+async def test_remove_thumbnail_raises_when_required(backend, monkeypatch):
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    dev.ensure_system_thumbnails()
 
     with pytest.raises(mtp_helper.MTPHelperError, match="not found"):
-        await mtp_helper.remove_thumbnail("thumbnail_x.jpg", ignore_missing=False)
+        await mtp_helper.remove_thumbnail(
+            "thumbnail_X_EBOK_portrait.jpg", ignore_missing=False
+        )
 
 
-# --- lock guard ------------------------------------------------------------
+async def test_remove_thumbnail_returns_false_when_folder_missing(backend, monkeypatch):
+    """Folder absent + ignore_missing=True is a no-op, not an error."""
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    backend.add_device()  # no system/thumbnails created
+
+    deleted = await mtp_helper.remove_thumbnail("thumbnail_X.jpg")
+
+    assert deleted is False
 
 
-async def test_non_overlap_lock_serialises_calls(monkeypatch):
+# ---------------------------------------------------------------------------
+# Lock + session lifecycle
+# ---------------------------------------------------------------------------
+
+
+async def test_lock_serialises_concurrent_operations(backend, monkeypatch):
     """Two concurrent verbs must not run their blocking work concurrently —
     the libmtp session and the USB bus are single-tenant."""
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    backend.add_device()
 
     active = 0
     max_active = 0
+    original_list_folder = backend.list_folder
 
-    def fake_detect_blocking() -> mtp_helper.DetectResult:
-        # Run inside ``asyncio.to_thread`` — this is a real worker thread.
+    def hooked_list_folder(dev, storage_id, parent_id):
         nonlocal active, max_active
         active += 1
         max_active = max(max_active, active)
-        # Hold the worker briefly so a second call (if not serialised) would
-        # overlap.
         import time
 
-        time.sleep(0.05)
+        time.sleep(0.02)
         active -= 1
-        return mtp_helper.DetectResult(connected=False, device=None)
+        return original_list_folder(dev, storage_id, parent_id)
 
-    monkeypatch.setattr(mtp_helper, "_detect_blocking", fake_detect_blocking)
+    monkeypatch.setattr(backend, "list_folder", hooked_list_folder)
 
-    await asyncio.gather(mtp_helper.detect(), mtp_helper.detect())
+    await asyncio.gather(mtp_helper.list_files(), mtp_helper.list_files())
 
     assert max_active == 1
 
 
-# ---------------------------------------------------------------------------
-# Cold-start regression: the blocking verbs must not depend on a prior
-# call having initialised the libmtp ctypes module global. The FastAPI
-# worker hit this when a fresh process's first MTP operation was send()
-# rather than detect(), and AssertionError fired before _open_device
-# (which runs _ensure_init) was ever reached.
-# ---------------------------------------------------------------------------
+async def test_open_close_pair_per_operation(backend, monkeypatch, local_book):
+    """Each blocking verb opens, runs, releases the device. No leaks
+    between verbs."""
+    monkeypatch.setenv("CALIBRE_WEB_CLI_MTP_USB_IDS", "")
+    dev = backend.add_device()
+    dev.ensure_documents()
 
+    await mtp_helper.list_files()
+    await mtp_helper.send(local_book, "alpha.azw3")
+    await mtp_helper.remove("alpha.azw3")
 
-def test_send_blocking_does_not_assert_on_cold_libmtp(monkeypatch, tmp_path):
-    """With ``_libmtp`` un-initialised, an early error path must raise
-    MTPHelperError (the intended failure), not AssertionError (cold-start
-    bug). Exercises the real ``_send_blocking`` via a missing-file path
-    that returns before any libmtp call, so we don't need a fake device.
-    """
-    monkeypatch.setattr(mtp_helper, "_libmtp", None)
-    missing = tmp_path / "definitely-not-here.epub"
-
-    with pytest.raises(mtp_helper.MTPHelperError, match="local file does not exist"):
-        mtp_helper._send_blocking(str(missing), "x.epub")
+    assert dev.opened_count == dev.closed_count == 3
 
 
 # ---------------------------------------------------------------------------
-# Pure-Python helpers (no libmtp needed)
+# Pure-Python helpers (no backend needed)
 # ---------------------------------------------------------------------------
 
 

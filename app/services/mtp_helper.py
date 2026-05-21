@@ -82,6 +82,12 @@ _FILETYPE_UNKNOWN = 44
 _DEFAULT_STORAGE_ID = 0x00010001
 _DOCUMENTS_FOLDER_NAME = "documents"
 
+# Sentinel ``parent_id`` for ``LIBMTP_Get_Files_And_Folders`` meaning "root
+# of storage". libmtp accepts this value where the PTP wire-protocol uses
+# 0xFFFFFFFF; passing 0 instead returns a full recursive listing on this
+# firmware (~50 entries) rather than the 9 top-level entries.
+_MTP_PARENT_ROOT = 0xFFFFFFFF
+
 
 class _LibMTPFile(Structure):
     pass
@@ -96,20 +102,6 @@ _LibMTPFile._fields_ = [
     ("modificationdate", c_long),
     ("filetype", c_int),
     ("next", POINTER(_LibMTPFile)),
-]
-
-
-class _LibMTPFolder(Structure):
-    pass
-
-
-_LibMTPFolder._fields_ = [
-    ("folder_id", c_uint32),
-    ("parent_id", c_uint32),
-    ("storage_id", c_uint32),
-    ("name", c_char_p),
-    ("sibling", POINTER(_LibMTPFolder)),
-    ("child", POINTER(_LibMTPFolder)),
 ]
 
 
@@ -158,8 +150,8 @@ def _ensure_init() -> None:
         ]
         libmtp.LIBMTP_Detect_Raw_Devices.restype = c_int
 
-        libmtp.LIBMTP_Open_Raw_Device.argtypes = [POINTER(_LibMTPRawDevice)]
-        libmtp.LIBMTP_Open_Raw_Device.restype = c_void_p
+        libmtp.LIBMTP_Open_Raw_Device_Uncached.argtypes = [POINTER(_LibMTPRawDevice)]
+        libmtp.LIBMTP_Open_Raw_Device_Uncached.restype = c_void_p
 
         libmtp.LIBMTP_Release_Device.argtypes = [c_void_p]
         libmtp.LIBMTP_Release_Device.restype = None
@@ -169,12 +161,6 @@ def _ensure_init() -> None:
 
         libmtp.LIBMTP_Get_Modelname.argtypes = [c_void_p]
         libmtp.LIBMTP_Get_Modelname.restype = c_char_p
-
-        libmtp.LIBMTP_Get_Folder_List.argtypes = [c_void_p]
-        libmtp.LIBMTP_Get_Folder_List.restype = POINTER(_LibMTPFolder)
-
-        libmtp.LIBMTP_destroy_folder_t.argtypes = [POINTER(_LibMTPFolder)]
-        libmtp.LIBMTP_destroy_folder_t.restype = None
 
         libmtp.LIBMTP_Get_Files_And_Folders.argtypes = [c_void_p, c_uint32, c_uint32]
         libmtp.LIBMTP_Get_Files_And_Folders.restype = POINTER(_LibMTPFile)
@@ -232,11 +218,12 @@ def _open_device() -> Iterator[tuple[c_void_p, str, str, str]]:
     the raw-device list freed on exit. Raises ``MTPHelperError`` if no device
     matches the filter, libmtp errors out, or the open returns NULL.
 
-    Open semantics: ``LIBMTP_Open_Raw_Device`` (the cached open) is used
-    because ``LIBMTP_Get_Folder_List`` returns an empty list against the
-    uncached handle on this firmware. The cache is what backs the folder
-    enumeration; without it folder lookup silently returns no results
-    (verified on-device: cached → 7 top-level folders, uncached → 0).
+    Open semantics: ``LIBMTP_Open_Raw_Device_Uncached`` is used because
+    ``LIBMTP_Get_Files_And_Folders`` (used for both folder lookup and file
+    listing) refuses to run on a cached handle ("tried to use
+    LIBMTP_Get_Files_And_Folders on a cached device!"). With the uncached
+    open libmtp issues fresh GetObjectHandles requests per folder rather
+    than walking an in-memory tree, which is exactly what we want.
     """
     _ensure_init()
     assert _libmtp is not None and _libc is not None
@@ -262,9 +249,9 @@ def _open_device() -> Iterator[tuple[c_void_p, str, str, str]]:
         if chosen is None:
             raise MTPHelperError(f"no MTP device matched USB ID filter {sorted(wanted)!r}")
         idx, vid, pid = chosen
-        dev = _libmtp.LIBMTP_Open_Raw_Device(byref(raw_ptr[idx]))
+        dev = _libmtp.LIBMTP_Open_Raw_Device_Uncached(byref(raw_ptr[idx]))
         if not dev:
-            raise MTPHelperError(f"LIBMTP_Open_Raw_Device returned NULL for {vid}:{pid}")
+            raise MTPHelperError(f"LIBMTP_Open_Raw_Device_Uncached returned NULL for {vid}:{pid}")
         try:
             manuf = _libmtp.LIBMTP_Get_Manufacturername(dev) or b""
             model = _libmtp.LIBMTP_Get_Modelname(dev) or b""
@@ -285,20 +272,22 @@ def _find_documents_folder_id(dev: c_void_p) -> int | None:
     it on every call rather than caching.
     """
     assert _libmtp is not None
-    folder_ptr = _libmtp.LIBMTP_Get_Folder_List(dev)
-    if not folder_ptr:
-        return None
+    head = _libmtp.LIBMTP_Get_Files_And_Folders(
+        dev, _DEFAULT_STORAGE_ID, c_uint32(_MTP_PARENT_ROOT)
+    )
     try:
-        node_ptr = folder_ptr
+        node_ptr = head
         while node_ptr:
             node = node_ptr.contents
-            name = (node.name or b"").decode(errors="replace")
-            if name.lower() == _DOCUMENTS_FOLDER_NAME:
-                return int(node.folder_id)
-            node_ptr = node.sibling
+            if node.filetype == _FILETYPE_FOLDER:
+                name = (node.filename or b"").decode(errors="replace")
+                if name.lower() == _DOCUMENTS_FOLDER_NAME:
+                    return int(node.item_id)
+            node_ptr = node.next
         return None
     finally:
-        _libmtp.LIBMTP_destroy_folder_t(folder_ptr)
+        if head:
+            _libmtp.LIBMTP_destroy_file_t(head)
 
 
 # ---------------------------------------------------------------------------

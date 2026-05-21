@@ -1,35 +1,45 @@
 """MTP helper for the connected e-reader.
 
-Two modes:
+In-process libmtp client. Drives ``libmtp.so.9`` directly via ctypes; no
+``calibre-debug`` subprocess and no ``mtp-tools``. Both prior approaches were
+insufficient on this device: Calibre's MTP wrapper silently returned success
+for ``put_file`` without actually transferring the book bytes, and
+``mtp-sendfile`` ignores both the remote filename argument and any parent
+folder — every file lands at storage root with the local basename.
 
-* **CLI mode** — invoked as `calibre-debug -e mtp_helper.py <verb> [args]`. Runs
-  the verb against Calibre's bundled ``calibre.devices.mtp`` and prints a
-  single JSON object to stdout. Per-operation errors are reported in the JSON
-  (``{"ok": false, "error": "..."}``). Non-zero exit is reserved for
-  catastrophic failure (e.g. libmtp not loadable).
-
-* **Caller mode** — importable from the FastAPI app. Provides async wrappers
-  that shell out to ``calibre-debug -e`` and parse the JSON response. A module-
-  level ``asyncio.Lock`` serialises calls so the 5-second status poller does
-  not overlap itself when libmtp first-call init takes several seconds.
+Threading: each verb runs its blocking libmtp calls on a worker thread via
+``asyncio.to_thread``. A module-level ``asyncio.Lock`` serialises calls so
+two operations never share the USB bus, which the jailbroken Kindle
+Paperwhite Signature Edition firmware does not tolerate.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import json
 import os
-import sys
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from ctypes import (
+    CDLL,
+    POINTER,
+    Structure,
+    byref,
+    c_char_p,
+    c_int,
+    c_long,
+    c_uint8,
+    c_uint16,
+    c_uint32,
+    c_uint64,
+    c_void_p,
+)
 from dataclasses import dataclass
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Caller (async API used by the FastAPI app)
+# Public types
 # ---------------------------------------------------------------------------
-
-_DEFAULT_HELPER_PATH = Path(__file__).resolve()
-_lock = asyncio.Lock()
 
 
 class MTPHelperError(RuntimeError):
@@ -55,83 +65,149 @@ class FileEntry:
     size: int
 
 
-async def _invoke(verb: str, *args: str, helper_path: Path | None = None) -> dict:
-    helper = str(helper_path or _DEFAULT_HELPER_PATH)
-    cmd = ["calibre-debug", "-e", helper, verb, *args]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        err = (stderr.decode() or stdout.decode() or "").strip()
-        raise MTPHelperError(f"calibre-debug exit {proc.returncode}: {err}")
-    # calibre-debug prints diagnostics around our JSON line: setup warnings
-    # before, teardown chatter ("Device 0 (VID=... PID=...) is a Amazon
-    # Kindle ...") after. Our _print tags its JSON with _JSON_MARKER so we
-    # can extract it unambiguously. If nothing matches, surface the full
-    # stdout (truncated) plus stderr so the caller sees what Calibre said.
-    text = stdout.decode()
-    for line in text.splitlines():
-        if line.startswith(_JSON_MARKER):
-            try:
-                return json.loads(line[len(_JSON_MARKER) :])
-            except json.JSONDecodeError as exc:
-                raise MTPHelperError(f"helper marker line was not valid JSON: {line!r}") from exc
-    err = stderr.decode().strip()
-    stdout_excerpt = text.strip()[-500:]
-    raise MTPHelperError(
-        f"helper did not emit JSON marker. stderr: {err!r}; stdout tail: {stdout_excerpt!r}"
-    )
+# ---------------------------------------------------------------------------
+# libmtp ctypes layout
+# ---------------------------------------------------------------------------
+
+# Values from libmtp 1.1.20 ``LIBMTP_filetype_t`` (src/libmtp.h.in). FOLDER is
+# first so it's 0; UNKNOWN is last in the enum at 44. We send books with
+# UNKNOWN so libmtp infers the type from the file extension — the Kindle
+# accepts EPUB/AZW3/MOBI/PDF through that path.
+_FILETYPE_FOLDER = 0
+_FILETYPE_UNKNOWN = 44
+
+# The Kindle Paperwhite Signature Edition (jailbroken MTP-only firmware)
+# exposes exactly one storage, with id 0x00010001. We don't enumerate
+# storages dynamically; if a future device exposes multiple, revisit.
+_DEFAULT_STORAGE_ID = 0x00010001
+_DOCUMENTS_FOLDER_NAME = "documents"
 
 
-async def detect(*, helper_path: Path | None = None) -> DetectResult:
-    async with _lock:
-        data = await _invoke("detect", helper_path=helper_path)
-    dev_dict = data.get("device") or None
-    device = Device(**dev_dict) if dev_dict else None
-    return DetectResult(connected=bool(data.get("connected")), device=device)
+class _LibMTPFile(Structure):
+    pass
 
 
-async def list_files(*, helper_path: Path | None = None) -> list[FileEntry]:
-    async with _lock:
-        data = await _invoke("list", helper_path=helper_path)
-    if not data.get("ok"):
-        raise MTPHelperError(data.get("error", "list failed"))
-    return [FileEntry(path=f["path"], size=f["size"]) for f in data.get("files", [])]
+_LibMTPFile._fields_ = [
+    ("item_id", c_uint32),
+    ("parent_id", c_uint32),
+    ("storage_id", c_uint32),
+    ("filename", c_char_p),
+    ("filesize", c_uint64),
+    ("modificationdate", c_long),
+    ("filetype", c_int),
+    ("next", POINTER(_LibMTPFile)),
+]
 
 
-async def send(local_path: Path, dest_name: str, *, helper_path: Path | None = None) -> str:
-    async with _lock:
-        data = await _invoke("send", str(local_path), dest_name, helper_path=helper_path)
-    if not data.get("ok"):
-        raise MTPHelperError(data.get("error", "send failed"))
-    return data["dest"]
+class _LibMTPFolder(Structure):
+    pass
 
 
-async def remove(dest_name: str, *, helper_path: Path | None = None) -> None:
-    async with _lock:
-        data = await _invoke("remove", dest_name, helper_path=helper_path)
-    if not data.get("ok"):
-        raise MTPHelperError(data.get("error", "remove failed"))
+_LibMTPFolder._fields_ = [
+    ("folder_id", c_uint32),
+    ("parent_id", c_uint32),
+    ("storage_id", c_uint32),
+    ("name", c_char_p),
+    ("sibling", POINTER(_LibMTPFolder)),
+    ("child", POINTER(_LibMTPFolder)),
+]
+
+
+class _LibMTPDeviceEntry(Structure):
+    _fields_ = [
+        ("vendor", c_char_p),
+        ("vendor_id", c_uint16),
+        ("product", c_char_p),
+        ("product_id", c_uint16),
+        ("device_flags", c_uint32),
+    ]
+
+
+class _LibMTPRawDevice(Structure):
+    _fields_ = [
+        ("device_entry", _LibMTPDeviceEntry),
+        ("bus_location", c_uint32),
+        ("devnum", c_uint8),
+    ]
+
+
+# Lazy-init so ``import mtp_helper`` works in environments without
+# libmtp.so.9 (dev machines, CI). Tests monkeypatch the ``_*_blocking``
+# functions and never hit ``_ensure_init``.
+_libmtp: CDLL | None = None
+_libc: CDLL | None = None
+_init_lock = threading.Lock()
+
+
+def _ensure_init() -> None:
+    global _libmtp, _libc
+    if _libmtp is not None:
+        return
+    with _init_lock:
+        if _libmtp is not None:
+            return
+        libmtp = CDLL("libmtp.so.9")
+        libc = CDLL("libc.so.6")
+
+        libmtp.LIBMTP_Init.argtypes = []
+        libmtp.LIBMTP_Init.restype = None
+
+        libmtp.LIBMTP_Detect_Raw_Devices.argtypes = [
+            POINTER(POINTER(_LibMTPRawDevice)),
+            POINTER(c_int),
+        ]
+        libmtp.LIBMTP_Detect_Raw_Devices.restype = c_int
+
+        libmtp.LIBMTP_Open_Raw_Device_Uncached.argtypes = [POINTER(_LibMTPRawDevice)]
+        libmtp.LIBMTP_Open_Raw_Device_Uncached.restype = c_void_p
+
+        libmtp.LIBMTP_Release_Device.argtypes = [c_void_p]
+        libmtp.LIBMTP_Release_Device.restype = None
+
+        libmtp.LIBMTP_Get_Manufacturername.argtypes = [c_void_p]
+        libmtp.LIBMTP_Get_Manufacturername.restype = c_char_p
+
+        libmtp.LIBMTP_Get_Modelname.argtypes = [c_void_p]
+        libmtp.LIBMTP_Get_Modelname.restype = c_char_p
+
+        libmtp.LIBMTP_Get_Folder_List.argtypes = [c_void_p]
+        libmtp.LIBMTP_Get_Folder_List.restype = POINTER(_LibMTPFolder)
+
+        libmtp.LIBMTP_destroy_folder_t.argtypes = [POINTER(_LibMTPFolder)]
+        libmtp.LIBMTP_destroy_folder_t.restype = None
+
+        libmtp.LIBMTP_Get_Files_And_Folders.argtypes = [c_void_p, c_uint32, c_uint32]
+        libmtp.LIBMTP_Get_Files_And_Folders.restype = POINTER(_LibMTPFile)
+
+        libmtp.LIBMTP_destroy_file_t.argtypes = [POINTER(_LibMTPFile)]
+        libmtp.LIBMTP_destroy_file_t.restype = None
+
+        libmtp.LIBMTP_Send_File_From_File.argtypes = [
+            c_void_p,
+            c_char_p,
+            POINTER(_LibMTPFile),
+            c_void_p,
+            c_void_p,
+        ]
+        libmtp.LIBMTP_Send_File_From_File.restype = c_int
+
+        libmtp.LIBMTP_Delete_Object.argtypes = [c_void_p, c_uint32]
+        libmtp.LIBMTP_Delete_Object.restype = c_int
+
+        libmtp.LIBMTP_Clear_Errorstack.argtypes = [c_void_p]
+        libmtp.LIBMTP_Clear_Errorstack.restype = None
+
+        libc.free.argtypes = [c_void_p]
+        libc.free.restype = None
+
+        libmtp.LIBMTP_Init()
+        _libmtp = libmtp
+        _libc = libc
 
 
 # ---------------------------------------------------------------------------
-# CLI mode (runs under `calibre-debug -e`)
+# Device session
 # ---------------------------------------------------------------------------
-
-
-_JSON_MARKER = "@@CWC_JSON@@"
-
-
-def _print(payload: dict) -> None:
-    # Tag the JSON line with a sentinel so the caller can pick it out of
-    # Calibre's chatter — Calibre's scanner prints lines like
-    # "Device 0 (VID=... and PID=...) is a ..." during teardown, after our
-    # output, and other warnings can show up before it.
-    sys.stdout.write(_JSON_MARKER + json.dumps(payload) + "\n")
-    sys.stdout.flush()
 
 
 def _parse_usb_id_filter() -> set[tuple[str, str]]:
@@ -144,216 +220,202 @@ def _parse_usb_id_filter() -> set[tuple[str, str]]:
         if ":" not in item:
             continue
         vid, pid = item.split(":", 1)
-        out.add((vid, pid))
+        out.add((vid.zfill(4), pid.zfill(4)))
     return out
 
 
-def _build_driver():
-    """Construct an MTP_DEVICE with the GUI-side attributes the headless
-    constructor skips. Without ``report_progress`` and ``current_friendly_name``,
-    ``detect_managed_devices()`` raises ``AttributeError`` during its internal
-    ``open()`` probe and swallows it — returning ``None`` and making the UI
-    report "no device" even when libmtp sees the device.
+@contextmanager
+def _open_device() -> Iterator[tuple[c_void_p, str, str, str]]:
+    """Open the first MTP device matching the USB ID filter.
 
-    Note: ``prefs`` is **not** set here. On calibre 9.8 it is a read-only
-    property auto-populated by ``startup()`` (assigning to it raises
-    "property 'prefs' has no setter"). Calling ``startup()`` is sufficient.
+    Yields ``(handle, vid, pid, friendly_name)``. The handle is released and
+    the raw-device list freed on exit. Raises ``MTPHelperError`` if no device
+    matches the filter, libmtp errors out, or the open returns NULL.
+
+    Open semantics: ``LIBMTP_Open_Raw_Device_Uncached`` is used so we don't
+    populate libmtp's internal filesystem cache — we query folders/files
+    explicitly via ``LIBMTP_Get_Folder_List`` and
+    ``LIBMTP_Get_Files_And_Folders`` instead. The cached open touches more
+    of the device tree on connect and was observed (via Calibre's wrapper)
+    to leave the device in a state where ``put_file`` returned success but
+    the bytes did not transfer.
     """
-    from calibre.devices.mtp.driver import MTP_DEVICE  # type: ignore
+    _ensure_init()
+    assert _libmtp is not None and _libc is not None
 
-    drv = MTP_DEVICE(None)
-    drv.startup()
-    drv.report_progress = lambda *a, **k: None
-    drv.current_friendly_name = None
-    return drv
-
-
-def _scan_and_detect(driver):
-    """Return the list of MTP devices currently attached.
-
-    Calibre's ``MTP_DEVICE.detect_managed_devices()`` returns a **single**
-    ``MTPDevice`` (a namedtuple) or ``None``, not a list of devices — that's
-    how the ``MANAGES_DEVICE_PRESENCE`` plugin contract works. The previous
-    ``... or []`` collapsed the None case correctly but left the single
-    namedtuple naked: iterating it then yielded the tuple's *field values*
-    (busnum, devnum, vendor_id, ...) instead of devices, and the caller's
-    ``getattr(dev, "vendor_id", 0)`` returned 0 for every integer/string item
-    so the device was silently rejected. Wrap into a single-element list.
-    """
-    from calibre.devices.scanner import DeviceScanner  # type: ignore
-
-    scanner = DeviceScanner()
-    scanner.scan()
-    found = driver.detect_managed_devices(scanner.devices)
-    return [found] if found is not None else []
-
-
-def _cli_detect() -> None:
-    driver = _build_driver()
-    connected_devs = _scan_and_detect(driver)
-
-    id_filter = _parse_usb_id_filter()
-    selected = None
-    for dev in connected_devs:
-        vid = format(getattr(dev, "vendor_id", 0) or 0, "04x")
-        pid = format(getattr(dev, "product_id", 0) or 0, "04x")
-        if id_filter and (vid, pid) not in id_filter:
-            continue
-        selected = (dev, vid, pid)
-        break
-
-    if selected is None:
-        _print({"connected": False, "device": None})
-        return
-
-    dev, vid, pid = selected
-    name = getattr(dev, "manufacturer", "") + " " + getattr(dev, "product", "")
-    _print({"connected": True, "device": {"name": name.strip(), "vid": vid, "pid": pid}})
-
-
-def _cli_list() -> None:
-    """List files in the Kindle's ``/documents`` folder.
-
-    Walks the cached MTP filesystem tree via ``FilesystemCache.storage(...)``
-    and ``find_path``. Deliberately avoids ``MTP_DEVICE.list()``: on Calibre
-    9.8 that path raises ``UnboundLocalError: cannot access local variable
-    'q' where it is not associated with a value`` for this firmware (a
-    Calibre internal bug). The filesystem cache is populated during
-    ``driver.open``, so we just traverse it ourselves.
-    """
-    driver = _build_driver()
-    devs = _scan_and_detect(driver)
-    if not devs:
-        _print({"ok": False, "error": "no device"})
-        return
-    driver.open(devs[0], "library")
-    storage = driver.filesystem_cache.storage(driver._main_id)
-    documents = storage.find_path(("documents",)) if storage is not None else None
-    files: list[dict] = []
-    if documents is not None:
-        for f in documents.files:
-            files.append({"path": "/".join(f.full_path), "size": getattr(f, "size", 0)})
-    _print({"ok": True, "files": files})
-
-
-def _cli_send(local: str, dest: str) -> None:
-    """Upload ``local`` to the Kindle's ``/documents`` folder, named ``dest``.
-
-    Calibre 9.8 ``MTP_DEVICE`` has no ``root(name)`` method — the previous
-    code (``driver.put_file(driver.root("documents"), ...)``) failed every
-    time with ``AttributeError: 'MTP_DEVICE' object has no attribute 'root'``.
-    The correct way (mirroring ``MTP_DEVICE.upload_books`` internally) is:
-
-    1. ``storage = driver.filesystem_cache.storage(driver._main_id)`` — the
-       device's main storage root, populated lazily during ``driver.open``.
-    2. ``parent = storage.find_path(("documents",))`` — case-insensitive folder
-       lookup against the cached MTP filesystem tree.
-    3. ``driver.put_file(parent, dest, stream, size)`` — the actual transfer.
-
-    Bypasses ``upload_books`` deliberately: that requires a list of
-    ``Metadata`` objects (it ``zip``\\s them with files+names) and applies
-    Calibre's ``save_template`` substitution to derive the destination path.
-    We already know the destination filename and folder; no templating
-    needed.
-    """
-    driver = _build_driver()
-    devs = _scan_and_detect(driver)
-    if not devs:
-        _print({"ok": False, "error": "no device"})
-        return
-    driver.open(devs[0], "library")
+    raw_ptr = POINTER(_LibMTPRawDevice)()
+    count = c_int(0)
+    err = _libmtp.LIBMTP_Detect_Raw_Devices(byref(raw_ptr), byref(count))
+    if err != 0:
+        raise MTPHelperError(f"LIBMTP_Detect_Raw_Devices error {err}")
+    if count.value == 0 or not raw_ptr:
+        raise MTPHelperError("no MTP devices found")
     try:
-        storage = driver.filesystem_cache.storage(driver._main_id)
-        parent = storage.find_path(("documents",))
-        if parent is None:
-            _print({"ok": False, "error": "device has no 'documents' folder"})
-            return
-        size = os.path.getsize(local)
-        with open(local, "rb") as fh:
-            mtp_file = driver.put_file(parent, dest, fh, size)
-        if mtp_file is None:
-            _print({"ok": False, "error": "put_file returned None (transfer not acknowledged)"})
-            return
-        result_size = getattr(mtp_file, "size", None)
-        if result_size is not None and result_size != size:
-            _print(
-                {
-                    "ok": False,
-                    "error": (
-                        f"size mismatch after put_file: sent {size}, device reports {result_size}"
-                    ),
-                }
-            )
-            return
-        _print({"ok": True, "dest": f"documents/{dest}", "size": result_size or size})
+        wanted = _parse_usb_id_filter()
+        chosen: tuple[int, str, str] | None = None
+        for i in range(count.value):
+            entry = raw_ptr[i].device_entry
+            vid = format(entry.vendor_id & 0xFFFF, "04x")
+            pid = format(entry.product_id & 0xFFFF, "04x")
+            if wanted and (vid, pid) not in wanted:
+                continue
+            chosen = (i, vid, pid)
+            break
+        if chosen is None:
+            raise MTPHelperError(f"no MTP device matched USB ID filter {sorted(wanted)!r}")
+        idx, vid, pid = chosen
+        dev = _libmtp.LIBMTP_Open_Raw_Device_Uncached(byref(raw_ptr[idx]))
+        if not dev:
+            raise MTPHelperError(f"LIBMTP_Open_Raw_Device_Uncached returned NULL for {vid}:{pid}")
+        try:
+            manuf = _libmtp.LIBMTP_Get_Manufacturername(dev) or b""
+            model = _libmtp.LIBMTP_Get_Modelname(dev) or b""
+            name = (
+                manuf.decode(errors="replace") + " " + model.decode(errors="replace")
+            ).strip() or f"{vid}:{pid}"
+            yield dev, vid, pid, name
+        finally:
+            _libmtp.LIBMTP_Release_Device(dev)
     finally:
-        # Explicit MTP CloseSession via shutdown(). Without this libmtp's
-        # destructor closes the connection abruptly at subprocess exit, and
-        # MTP devices like the Kindle may treat an abrupt drop as "host
-        # crashed" and discard the in-flight file rather than commit it.
-        # The Kindle firmware will drop the USB device on the close — that
-        # is expected (and unavoidable on this firmware).
-        with contextlib.suppress(Exception):
-            driver.shutdown()
+        _libc.free(raw_ptr)
 
 
-def _cli_remove(dest: str) -> None:
-    """Remove ``documents/<dest>`` from the Kindle.
+def _find_documents_folder_id(dev: c_void_p) -> int | None:
+    """Walk the top-level folders and return the id of ``documents``.
 
-    Calibre 9.8 ``MTP_DEVICE`` has no ``delete_file`` — the previous code's
-    ``driver.delete_file(f"documents/{dest}")`` would have raised
-    ``AttributeError``. The supported path is to resolve the file via the
-    filesystem cache and call ``recursive_delete`` on it (this is what
-    ``MTP_DEVICE.delete_books`` does internally for each path).
+    The id varies between devices (and after a factory reset), so we resolve
+    it on every call rather than caching.
     """
-    driver = _build_driver()
-    devs = _scan_and_detect(driver)
-    if not devs:
-        _print({"ok": False, "error": "no device"})
-        return
-    driver.open(devs[0], "library")
+    assert _libmtp is not None
+    folder_ptr = _libmtp.LIBMTP_Get_Folder_List(dev)
+    if not folder_ptr:
+        return None
     try:
-        storage = driver.filesystem_cache.storage(driver._main_id)
-        target = storage.find_path(("documents", dest)) if storage is not None else None
-        if target is None:
-            _print({"ok": False, "error": f"documents/{dest} not found on device"})
-            return
-        driver.recursive_delete(target)
-        _print({"ok": True})
+        node_ptr = folder_ptr
+        while node_ptr:
+            node = node_ptr.contents
+            name = (node.name or b"").decode(errors="replace")
+            if name.lower() == _DOCUMENTS_FOLDER_NAME:
+                return int(node.folder_id)
+            node_ptr = node.sibling
+        return None
     finally:
-        with contextlib.suppress(Exception):
-            driver.shutdown()
+        _libmtp.LIBMTP_destroy_folder_t(folder_ptr)
 
 
-def _main(argv: list[str]) -> int:
-    if not argv:
-        _print({"ok": False, "error": "missing verb"})
-        return 0
-    verb, *rest = argv
+# ---------------------------------------------------------------------------
+# Blocking verb implementations (run on a worker thread)
+# ---------------------------------------------------------------------------
+
+
+def _detect_blocking() -> DetectResult:
     try:
-        if verb == "detect":
-            _cli_detect()
-        elif verb == "list":
-            _cli_list()
-        elif verb == "send":
-            if len(rest) != 2:
-                _print({"ok": False, "error": "send requires <local> <dest>"})
-                return 0
-            _cli_send(rest[0], rest[1])
-        elif verb == "remove":
-            if len(rest) != 1:
-                _print({"ok": False, "error": "remove requires <dest>"})
-                return 0
-            _cli_remove(rest[0])
-        else:
-            _print({"ok": False, "error": f"unknown verb {verb!r}"})
-    except Exception as exc:
-        # Catastrophic failures (libmtp not loadable, calibre import error)
-        # exit non-zero so the caller can distinguish them from per-op errors.
-        sys.stderr.write(f"{type(exc).__name__}: {exc}\n")
-        return 2
-    return 0
+        with _open_device() as (_dev, vid, pid, name):
+            return DetectResult(connected=True, device=Device(name=name, vid=vid, pid=pid))
+    except MTPHelperError:
+        return DetectResult(connected=False, device=None)
 
 
-if __name__ == "__main__":
-    sys.exit(_main(sys.argv[1:]))
+def _list_blocking() -> list[FileEntry]:
+    assert _libmtp is not None
+    with _open_device() as (dev, _vid, _pid, _name):
+        folder_id = _find_documents_folder_id(dev)
+        if folder_id is None:
+            return []
+        head = _libmtp.LIBMTP_Get_Files_And_Folders(dev, _DEFAULT_STORAGE_ID, c_uint32(folder_id))
+        try:
+            out: list[FileEntry] = []
+            node_ptr = head
+            while node_ptr:
+                node = node_ptr.contents
+                if node.filetype != _FILETYPE_FOLDER:
+                    name = (node.filename or b"").decode(errors="replace")
+                    out.append(FileEntry(path=f"documents/{name}", size=int(node.filesize)))
+                node_ptr = node.next
+            return out
+        finally:
+            if head:
+                _libmtp.LIBMTP_destroy_file_t(head)
+
+
+def _send_blocking(local_path: str, dest_name: str) -> str:
+    assert _libmtp is not None
+    if not os.path.isfile(local_path):
+        raise MTPHelperError(f"local file does not exist: {local_path!r}")
+    with _open_device() as (dev, _vid, _pid, _name):
+        folder_id = _find_documents_folder_id(dev)
+        if folder_id is None:
+            raise MTPHelperError("device has no 'documents' folder")
+        size = os.path.getsize(local_path)
+        f = _LibMTPFile()
+        f.item_id = 0
+        f.parent_id = folder_id
+        f.storage_id = _DEFAULT_STORAGE_ID
+        f.filename = dest_name.encode()
+        f.filesize = size
+        f.modificationdate = 0
+        f.filetype = _FILETYPE_UNKNOWN
+        f.next = POINTER(_LibMTPFile)()
+        ret = _libmtp.LIBMTP_Send_File_From_File(dev, local_path.encode(), byref(f), None, None)
+        if ret != 0:
+            _libmtp.LIBMTP_Clear_Errorstack(dev)
+            raise MTPHelperError(f"LIBMTP_Send_File_From_File returned {ret}")
+        if f.item_id == 0:
+            raise MTPHelperError("send returned success but no item_id was assigned")
+        return f"documents/{dest_name}"
+
+
+def _remove_blocking(dest_name: str) -> None:
+    assert _libmtp is not None
+    with _open_device() as (dev, _vid, _pid, _name):
+        folder_id = _find_documents_folder_id(dev)
+        if folder_id is None:
+            raise MTPHelperError("device has no 'documents' folder")
+        head = _libmtp.LIBMTP_Get_Files_And_Folders(dev, _DEFAULT_STORAGE_ID, c_uint32(folder_id))
+        target_id: int | None = None
+        try:
+            node_ptr = head
+            while node_ptr:
+                node = node_ptr.contents
+                if node.filetype != _FILETYPE_FOLDER:
+                    name = (node.filename or b"").decode(errors="replace")
+                    if name == dest_name:
+                        target_id = int(node.item_id)
+                        break
+                node_ptr = node.next
+        finally:
+            if head:
+                _libmtp.LIBMTP_destroy_file_t(head)
+        if target_id is None:
+            raise MTPHelperError(f"documents/{dest_name} not found on device")
+        ret = _libmtp.LIBMTP_Delete_Object(dev, c_uint32(target_id))
+        if ret != 0:
+            _libmtp.LIBMTP_Clear_Errorstack(dev)
+            raise MTPHelperError(f"LIBMTP_Delete_Object returned {ret} for {dest_name!r}")
+
+
+# ---------------------------------------------------------------------------
+# Async API
+# ---------------------------------------------------------------------------
+
+_lock = asyncio.Lock()
+
+
+async def detect() -> DetectResult:
+    async with _lock:
+        return await asyncio.to_thread(_detect_blocking)
+
+
+async def list_files() -> list[FileEntry]:
+    async with _lock:
+        return await asyncio.to_thread(_list_blocking)
+
+
+async def send(local_path: Path, dest_name: str) -> str:
+    async with _lock:
+        return await asyncio.to_thread(_send_blocking, str(local_path), dest_name)
+
+
+async def remove(dest_name: str) -> None:
+    async with _lock:
+        await asyncio.to_thread(_remove_blocking, dest_name)

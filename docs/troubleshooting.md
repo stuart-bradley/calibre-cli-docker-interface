@@ -103,6 +103,23 @@ If a tile is still blank after a send:
    ```
    then read the helper source for the folder-walk routines.
 
+## "On device" badges don't appear after plugging the Kindle in
+
+The connection indicator and the badges populate via different paths. The
+indicator comes from a 5-second sysfs poll; the badges come from a one-shot
+MTP file listing the poller spawns on connect. If you see "Device
+connected" but no badges:
+
+1. Wait 5–10 s — the listing runs in the background and lands after the
+   indicator.
+2. Check `docker logs calibre-web-cli | grep -i sync` for warnings. A line
+   like `on-device filename sync attempt 1 failed; retrying in 30s` means
+   the device was busy or in a bad state — the poller retries at +30 s and
+   +5 min before giving up. Replug to reset and try again.
+3. `synced N on-device filenames from MTP` (N=0) means the listing
+   succeeded but the device's `/documents/` folder is empty. Anything you
+   send next will badge correctly via the optimistic update path.
+
 ## `restore_database` fails with `FileNotFoundError: '/books/.calnotes'`
 
 This is an upstream Calibre quirk — `restore_database` walks the library and

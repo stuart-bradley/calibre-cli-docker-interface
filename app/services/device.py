@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 from app.config import Settings
+from app.services import mtp_helper
 from app.services.mtp_helper import DetectResult, Device
 from app.state import DeviceState
 
@@ -19,6 +21,13 @@ log = logging.getLogger(__name__)
 
 # Host's USB sysfs root. Module-level so tests can monkeypatch it.
 _SYSFS_USB_DEVICES = Path("/sys/bus/usb/devices")
+
+# Backoff for the per-connection on-device file sync. First attempt fires
+# immediately on detection; entries here are the wait before attempts 2 and
+# 3 respectively. After _SYNC_MAX_ATTEMPTS failed attempts we give up for
+# the session (terminal state — replug to reset).
+_SYNC_BACKOFF_SECONDS: tuple[float, ...] = (30.0, 300.0)
+_SYNC_MAX_ATTEMPTS = 3
 
 
 def _read_sysfs_str(path: Path) -> str:
@@ -75,20 +84,69 @@ def _detect_kindle_via_sysfs(usb_ids: list[str]) -> Device | None:
     return None
 
 
+async def _sync_filenames(state: DeviceState) -> None:
+    """Populate ``state.on_device_filenames`` from a single MTP listing.
+
+    Spawned by :func:`_poll_tick` as a background task on each device-connect
+    event. Merges results into the existing set rather than overwriting so
+    optimistic entries the handlers added between the sync start and finish
+    aren't dropped. On failure, schedules a retry via the backoff table; on
+    the third consecutive failure, marks the session terminal (replug to
+    reset).
+    """
+    try:
+        entries = await mtp_helper.list_files()
+        names = {Path(e.path).name for e in entries}
+        state.on_device_filenames |= names
+        state.files_synced = True
+        state.sync_attempts = 0
+        log.info("synced %d on-device filenames from MTP", len(names))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        state.sync_attempts += 1
+        if state.sync_attempts >= _SYNC_MAX_ATTEMPTS:
+            state.files_synced = True
+            log.warning(
+                "on-device filename sync failed %d times; giving up for this session: %s",
+                state.sync_attempts,
+                exc,
+            )
+        else:
+            delay = _SYNC_BACKOFF_SECONDS[state.sync_attempts - 1]
+            state.next_sync_at = time.monotonic() + delay
+            log.warning(
+                "on-device filename sync attempt %d failed; retrying in %.0fs: %s",
+                state.sync_attempts,
+                delay,
+                exc,
+            )
+    finally:
+        state.sync_in_progress = False
+
+
+def _reset_sync_state(state: DeviceState) -> None:
+    state.on_device_filenames = set()
+    state.files_synced = False
+    state.sync_attempts = 0
+    state.next_sync_at = 0.0
+
+
 async def _poll_tick(settings: Settings, state: DeviceState) -> None:
     """One iteration of the device-state poll. Extracted from the loop so tests
     can drive it directly without orchestrating ``asyncio.sleep``.
 
-    Presence-only contract: this function NEVER opens MTP. Empirically, even
-    a single ``mtp_helper.list_files()`` from inside the container is enough
-    to drop the jailbroken Kindle MTP firmware off the USB bus for minutes,
-    sometimes indefinitely (the previous "list once per session" attempt at
-    f83b48f confirmed this). The poller's job here is reduced to:
+    Two responsibilities:
 
-    * synthesize ``state.detect`` from sysfs (truth-of-presence)
-    * preserve ``state.on_device_filenames`` across ticks while the device is
-      present — that cache is populated **only** by the optimistic add/discard
-      in :mod:`app.handlers` after a user-initiated send/remove.
+    * synthesize ``state.detect`` from sysfs every tick — cheap and
+      side-effect-free; safe even on the jailbroken Kindle firmware that
+      treats MTP opens as a "host is done" signal.
+    * trigger a one-shot MTP file listing on each device-connect event, via
+      :func:`_sync_filenames`. Listing is gated on ``files_synced`` (terminal
+      for the session), ``sync_in_progress`` (no overlap), and
+      ``next_sync_at`` (backoff). The sync runs as a fire-and-forget task so
+      the tick stays fast; the connection indicator updates within one tick
+      regardless of how long the listing takes.
 
     ``CancelledError`` is re-raised so shutdown still works. Any other
     exception is caught and recorded so one bad tick can't kill the loop.
@@ -99,17 +157,23 @@ async def _poll_tick(settings: Settings, state: DeviceState) -> None:
             if state.detect is not None:
                 log.debug("device left USB bus; clearing detect state")
             state.detect = None
-            state.on_device_filenames = set()
+            _reset_sync_state(state)
             state.last_detect_error = None
             return
-        # Device on bus — synthesize the connected state from sysfs. No MTP, ever.
         state.detect = DetectResult(connected=True, device=detected)
+        if (
+            not state.files_synced
+            and not state.sync_in_progress
+            and time.monotonic() >= state.next_sync_at
+        ):
+            state.sync_in_progress = True
+            asyncio.create_task(_sync_filenames(state))
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         log.exception("device poller tick failed; continuing")
         state.detect = None
-        state.on_device_filenames = set()
+        _reset_sync_state(state)
         state.last_detect_error = f"{type(exc).__name__}: {exc}"
     finally:
         state.has_polled = True
@@ -118,9 +182,10 @@ async def _poll_tick(settings: Settings, state: DeviceState) -> None:
 async def poll_device_loop(settings: Settings, state: DeviceState, interval: float = 5.0) -> None:
     """Watch for device presence by polling sysfs.
 
-    The poller never opens MTP — see :func:`_poll_tick` and
-    :func:`_detect_kindle_via_sysfs` for why. The on-device filename cache is
-    maintained by :mod:`app.handlers` (optimistic update after send/remove).
+    Every tick: sysfs presence check (cheap) plus, on the connect transition,
+    a one-shot MTP file listing in the background to seed the on-device
+    filename cache. See :func:`_poll_tick` and :func:`_sync_filenames` for
+    the contract.
     """
     while True:
         await _poll_tick(settings, state)

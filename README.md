@@ -89,6 +89,15 @@ All 11 pass = ship it.
 - Kindle Paperwhite Signature Edition (USB ID `1949:9981`) — verified.
 - Any device libmtp recognises should work. If your device is rejected by `libmtp` it will not appear under `detect`.
 
+## On-device badges
+
+Books currently on the connected e-reader render an "on device" badge on their library tile. The badge cache is populated two ways:
+
+- **On connect**, the device poller spawns a one-shot `mtp_helper.list_files()` call in the background and seeds the cache with everything in the device's `/documents/` folder. The connection indicator updates within ~5 s; the badges follow once the listing returns (typically another ~1–2 s).
+- **Per action**, every successful send/remove updates the cache optimistically — so a badge appears the moment a send completes, without waiting for a re-listing.
+
+If the initial listing fails, the poller retries after 30 s and then 5 min before giving up for that USB-presence session. Replug the device to reset.
+
 ## Kindle library-tile covers
 
 On a stock Kindle the library tile cover is rendered from a JPEG that lives in `system/thumbnails/thumbnail_<UUID>_<CDE_TYPE>_portrait.jpg`, where the UUID and CDE type are EXTH records 113 and 501 inside the book. Calibre Desktop's KINDLE driver writes this file for every send; without it, the firmware's runtime cover extractor either fails outright (older / jailbroken firmwares) or leaves a 0-byte `.tmp.partial` sentinel that blocks future re-extraction.

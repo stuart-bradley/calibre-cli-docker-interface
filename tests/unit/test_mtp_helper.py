@@ -157,6 +157,28 @@ async def test_non_overlap_lock_serialises_calls(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Cold-start regression: the blocking verbs must not depend on a prior
+# call having initialised the libmtp ctypes module global. The FastAPI
+# worker hit this when a fresh process's first MTP operation was send()
+# rather than detect(), and AssertionError fired before _open_device
+# (which runs _ensure_init) was ever reached.
+# ---------------------------------------------------------------------------
+
+
+def test_send_blocking_does_not_assert_on_cold_libmtp(monkeypatch, tmp_path):
+    """With ``_libmtp`` un-initialised, an early error path must raise
+    MTPHelperError (the intended failure), not AssertionError (cold-start
+    bug). Exercises the real ``_send_blocking`` via a missing-file path
+    that returns before any libmtp call, so we don't need a fake device.
+    """
+    monkeypatch.setattr(mtp_helper, "_libmtp", None)
+    missing = tmp_path / "definitely-not-here.epub"
+
+    with pytest.raises(mtp_helper.MTPHelperError, match="local file does not exist"):
+        mtp_helper._send_blocking(str(missing), "x.epub")
+
+
+# ---------------------------------------------------------------------------
 # Pure-Python helpers (no libmtp needed)
 # ---------------------------------------------------------------------------
 

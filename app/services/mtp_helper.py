@@ -304,8 +304,9 @@ def _detect_blocking() -> DetectResult:
 
 
 def _list_blocking() -> list[FileEntry]:
-    assert _libmtp is not None
     with _open_device() as (dev, _vid, _pid, _name):
+        # _open_device ran _ensure_init, so _libmtp is set.
+        assert _libmtp is not None
         folder_id = _find_documents_folder_id(dev)
         if folder_id is None:
             return []
@@ -326,10 +327,10 @@ def _list_blocking() -> list[FileEntry]:
 
 
 def _send_blocking(local_path: str, dest_name: str) -> str:
-    assert _libmtp is not None
     if not os.path.isfile(local_path):
         raise MTPHelperError(f"local file does not exist: {local_path!r}")
     with _open_device() as (dev, _vid, _pid, _name):
+        assert _libmtp is not None
         folder_id = _find_documents_folder_id(dev)
         if folder_id is None:
             raise MTPHelperError("device has no 'documents' folder")
@@ -353,8 +354,8 @@ def _send_blocking(local_path: str, dest_name: str) -> str:
 
 
 def _remove_blocking(dest_name: str) -> None:
-    assert _libmtp is not None
     with _open_device() as (dev, _vid, _pid, _name):
+        assert _libmtp is not None
         folder_id = _find_documents_folder_id(dev)
         if folder_id is None:
             raise MTPHelperError("device has no 'documents' folder")

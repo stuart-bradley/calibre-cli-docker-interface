@@ -165,3 +165,31 @@ def test_explicit_sort_title_still_works(client):
     children = resp.text.index("Children of Ruin")
     wizard = resp.text.index("A Wizard of Earthsea")
     assert children < wizard
+
+
+def test_refresh_modal_collects_checkboxes_by_name_not_form_descendant(client):
+    """Regression: book_id checkboxes are bound to #batch-form via the form=
+    attribute, NOT nested inside it, so the old descendant selector
+    '#batch-form input[name=book_id]' matched zero elements and the Refresh
+    modal POSTed no book_id → 422 'Field required'. cwcOpenRefreshModal must
+    collect them by name. (plan: i-tried-to-use-jiggly-hopper)"""
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    # The broken DOM-descendant selector must not reappear.
+    assert "#batch-form input[name=book_id]" not in resp.text
+    # The corrected collection selector must be present.
+    assert "input[name=book_id]:checked" in resp.text
+
+
+def test_batch_bar_buttons_disabled_at_zero_selection(client):
+    """The four batch actions render disabled on load (0 books selected) so an
+    empty selection can never submit a missing book_id and hit the raw 422."""
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    html = resp.text
+    assert 'disabled onclick="cwcOpenRefreshModal()"' in html  # Refresh
+    assert '<button type="button" disabled' in html  # Convert (and Refresh)
+    assert 'disabled formaction="/batch/send"' in html  # Send to device
+    assert 'disabled formaction="/batch/remove"' in html  # Remove from device

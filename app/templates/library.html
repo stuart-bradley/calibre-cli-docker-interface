@@ -33,16 +33,16 @@
 
 <div class="batch-bar">
   <span><strong id="selection-count">0</strong> selected</span>
-  <button type="button" onclick="cwcOpenRefreshModal()">Refresh metadata</button>
-  <button type="button"
+  <button type="button" disabled onclick="cwcOpenRefreshModal()">Refresh metadata</button>
+  <button type="button" disabled
           onclick="cwcOpenConvertModal()"
           hx-post="/batch/convert/dialog"
           hx-include="#batch-form"
           hx-target="#modal-convert-body"
           hx-swap="innerHTML">Convert</button>
   <span class="cwc-device-only">
-    <button form="batch-form" formaction="/batch/send" formmethod="post">Send to device</button>
-    <button form="batch-form" formaction="/batch/remove" formmethod="post">Remove from device</button>
+    <button form="batch-form" disabled formaction="/batch/send" formmethod="post">Send to device</button>
+    <button form="batch-form" disabled formaction="/batch/remove" formmethod="post">Remove from device</button>
   </span>
 </div>
 
@@ -59,7 +59,7 @@
     const dialog = document.getElementById('modal-refresh');
     const slot = dialog.querySelector('.book-ids-slot');
     slot.replaceChildren();
-    document.querySelectorAll('#batch-form input[name=book_id]:checked').forEach(cb => {
+    document.querySelectorAll('input[name=book_id]:checked').forEach(cb => {
       const h = document.createElement('input');
       h.type = 'hidden'; h.name = 'book_id'; h.value = cb.value;
       slot.appendChild(h);
@@ -91,11 +91,14 @@
 </div>
 
 <script>
-  const sel = document.getElementById("selection-count");
+  function cwcSyncBatchBar() {
+    const n = document.querySelectorAll("input[name=book_id]:checked").length;
+    document.getElementById("selection-count").textContent = n;
+    document.querySelectorAll(".batch-bar button").forEach(b => { b.disabled = n === 0; });
+  }
   document.addEventListener("change", e => {
-    if (e.target.matches("input[name=book_id]")) {
-      sel.textContent = document.querySelectorAll("input[name=book_id]:checked").length;
-    }
+    if (e.target.matches("input[name=book_id]")) cwcSyncBatchBar();
   });
+  cwcSyncBatchBar();
 </script>
 {% endblock %}

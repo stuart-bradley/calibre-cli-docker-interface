@@ -176,10 +176,15 @@ def test_refresh_modal_collects_checkboxes_by_name_not_form_descendant(client):
     resp = client.get("/")
 
     assert resp.status_code == 200
-    # The broken DOM-descendant selector must not reappear.
+    # The broken DOM-descendant selector must not reappear anywhere on the page.
     assert "#batch-form input[name=book_id]" not in resp.text
-    # The corrected collection selector must be present.
-    assert "input[name=book_id]:checked" in resp.text
+    # Pin the corrected selector to cwcOpenRefreshModal's own body: the same
+    # selector also appears in cwcSyncBatchBar, so an unscoped check would pass
+    # even if this function alone regressed back to the descendant selector.
+    start = resp.text.index("function cwcOpenRefreshModal")
+    body = resp.text[start : resp.text.index("dialog.showModal()", start)]
+    assert "input[name=book_id]:checked" in body
+    assert "#batch-form" not in body
 
 
 def test_batch_bar_buttons_disabled_at_zero_selection(client):
@@ -193,3 +198,22 @@ def test_batch_bar_buttons_disabled_at_zero_selection(client):
     assert '<button type="button" disabled' in html  # Convert (and Refresh)
     assert 'disabled formaction="/batch/send"' in html  # Send to device
     assert 'disabled formaction="/batch/remove"' in html  # Remove from device
+
+
+def test_batch_bar_toggle_wiring_present(client):
+    """The enable side of the gate (re-enabling buttons once a book is selected)
+    runs only in the browser, and this suite has no JS runtime. Guard against
+    accidental removal of the wiring so a regression that left the buttons
+    permanently disabled is at least caught structurally: cwcSyncBatchBar must
+    drive `disabled` from the live checked count, and be wired to checkbox
+    'change' events plus run once on load."""
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    html = resp.text
+    # The toggle flips `disabled` from the live selection count over all buttons.
+    assert ".batch-bar button" in html
+    assert "b.disabled = n === 0" in html
+    # ...and it is actually wired to selection changes (and an initial call).
+    assert 'e.target.matches("input[name=book_id]")' in html
+    assert "cwcSyncBatchBar()" in html

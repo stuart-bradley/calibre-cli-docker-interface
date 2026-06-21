@@ -117,19 +117,6 @@ def list_jobs(request: Request):
     )
 
 
-@router.get("/jobs/{job_id}", response_class=HTMLResponse)
-def get_job(job_id: str, request: Request):
-    worker = request.app.state.worker
-    job = worker.get_job(job_id)
-    if job is None:
-        raise HTTPException(404)
-    return templates.TemplateResponse(
-        request,
-        "jobs.html",
-        {"jobs": [job], "device": request.app.state.device_state.detect},
-    )
-
-
 @router.get("/jobs/{job_id}/fragment", response_class=HTMLResponse)
 def job_fragment(job_id: str, request: Request):
     worker = request.app.state.worker

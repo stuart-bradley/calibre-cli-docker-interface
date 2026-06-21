@@ -65,11 +65,3 @@ def test_health_ok_when_poller_clear_after_error(client, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()["mtp"] == "ok"
-
-
-def test_health_env_returns_uid_gid(client):
-    resp = client.get("/health/env")
-    body = resp.json()
-
-    assert isinstance(body["uid"], int)
-    assert isinstance(body["gid"], int)

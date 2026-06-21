@@ -6,14 +6,6 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
-def _split_csv(value: str | list[str] | None) -> list[str]:
-    if value is None or value == "":
-        return []
-    if isinstance(value, list):
-        return value
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
@@ -47,17 +39,14 @@ class Settings(BaseSettings):
         default=14, validation_alias="CALIBRE_WEB_CLI_SNAPSHOT_RETENTION_DAYS"
     )
 
-    @field_validator("password", mode="before")
-    @classmethod
-    def _empty_password_is_none(cls, value: str | None) -> str | None:
-        if value is None or value == "":
-            return None
-        return value
-
     @field_validator("metadata_sources", "device_format_order", "mtp_usb_ids", mode="before")
     @classmethod
     def _parse_csv(cls, value: str | list[str] | None) -> list[str]:
-        return _split_csv(value)
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            return value
+        return [item.strip() for item in value.split(",") if item.strip()]
 
 
 @lru_cache(maxsize=1)

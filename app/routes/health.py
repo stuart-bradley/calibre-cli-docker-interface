@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
@@ -57,9 +55,3 @@ def health(request: Request, settings: Settings = Depends(get_settings)):
 
     status_code = 200 if ok else 503
     return JSONResponse(checks, status_code=status_code)
-
-
-@router.get("/health/env")
-def health_env():
-    """Diagnostic — confirms PUID/PGID resolution at runtime."""
-    return {"uid": os.getuid(), "gid": os.getgid()}

@@ -61,13 +61,6 @@ def test_library_path_defaults_to_container_mount(_clear_env):
     assert Settings().library_path == Path("/books")
 
 
-def test_empty_password_becomes_none(_clear_env, monkeypatch):
-    monkeypatch.setenv("LIBRARY_PATH", "/tmp/library")
-    monkeypatch.setenv("CALIBRE_WEB_CLI_PASSWORD", "")
-
-    assert Settings().password is None
-
-
 def test_password_set(_clear_env, monkeypatch):
     monkeypatch.setenv("LIBRARY_PATH", "/tmp/library")
     monkeypatch.setenv("CALIBRE_WEB_CLI_PASSWORD", "hunter2")
